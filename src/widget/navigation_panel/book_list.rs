@@ -190,6 +190,7 @@ impl BookList {
         palette: &Base16Palette,
         current_book_path: Option<&str>,
         is_calibre_mode: bool,
+        is_scanning: bool,
     ) {
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
@@ -329,6 +330,13 @@ impl BookList {
                 super::underline_line(&mut content);
             }
             items.push(ListItem::new(content));
+        }
+
+        if items.is_empty() && is_scanning {
+            items.push(ListItem::new(Span::styled(
+                "Scanning library...",
+                Style::default().fg(palette.base_03),
+            )));
         }
 
         let settings = self.settings.load();

@@ -13,6 +13,7 @@ use simplelog::{LevelFilter, WriteLogger};
 
 mod cli;
 mod extract;
+mod piped_input;
 mod print;
 
 // Use modules from the library crate
@@ -79,6 +80,23 @@ fn build_config_migrations() -> Vec<Box<dyn Migration>> {
     // stub via `write_template_if_missing()`.
 
     out
+}
+
+/// Path to open for a FILE argument: itself, or a temp copy when it is stdin or a pipe.
+fn resolve_input_path(arg: &str) -> String {
+    if !piped_input::is_stream_arg(arg) {
+        return arg.to_string();
+    }
+    match piped_input::materialize(arg) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(e) => {
+            eprintln!(
+                "Error: failed to read document from {}: {e:#}",
+                piped_input::describe(arg)
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Read a y/n answer from stdin. Anything other than "y"/"yes" (case-insensitive) counts as no.
@@ -164,10 +182,12 @@ fn main() -> Result<()> {
                 chapter,
                 pages,
             } => {
-                return print::cmd_print(file, *toc, *info, *chapter, *pages);
+                let file = resolve_input_path(file);
+                return print::cmd_print(&file, *toc, *info, *chapter, *pages);
             }
             cli::Command::Extract { file, output } => {
-                return extract::cmd_extract(file, output);
+                let file = resolve_input_path(file);
+                return extract::cmd_extract(&file, output);
             }
         }
     }
@@ -178,6 +198,15 @@ fn main() -> Result<()> {
         return handle_synctex_forward(fwd, args.file.as_deref());
     }
 
+    // Before any terminal detection, which caches its results.
+    if args.no_images {
+        bookokrat::terminal::disable_images();
+    }
+
+    // A piped document is read from its own library, not from where it came from.
+    let piped = args.file.as_deref().is_some_and(piped_input::is_stream_arg);
+    let library_file = if piped { None } else { args.file.as_deref() };
+
     // Layer user's keybindings.toml overrides on top of the built-in defaults.
     // Tests deliberately skip this so they stay hermetic with respect to
     // `~/.config/bookokrat/`. Any issues are surfaced to the app below so it
@@ -185,9 +214,7 @@ fn main() -> Result<()> {
     let keybinding_load_errors = bookokrat::keybindings::reload_keymap();
 
     // Resolve library directory from file argument or CWD
-    let library_dir = args
-        .file
-        .as_deref()
+    let library_dir = library_file
         .and_then(|p| Path::new(p).parent())
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_path_buf())
@@ -231,9 +258,15 @@ fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         std::process::id()
     );
+    if args.no_images {
+        info!("Images disabled (--no-images)");
+    }
+
+    // A piped document is copied into the cache before anything else touches stdin.
+    let file = args.file.as_deref().map(resolve_input_path);
 
     // Validate file argument before entering TUI
-    if let Some(ref path) = args.file {
+    if let Some(ref path) = file {
         if !Path::new(path).exists() {
             eprintln!("Error: file not found: {path}");
             std::process::exit(1);
@@ -242,6 +275,33 @@ fn main() -> Result<()> {
             eprintln!("Error: unsupported file format: {path}");
             std::process::exit(1);
         }
+        #[cfg(feature = "pdf")]
+        if args.no_images
+            && matches!(
+                bookokrat::book_manager::BookManager::detect_format(path),
+                Some(
+                    bookokrat::book_manager::BookFormat::Pdf
+                        | bookokrat::book_manager::BookFormat::Djvu
+                )
+            )
+        {
+            let shown = args
+                .file
+                .as_deref()
+                .map_or(path.as_str(), piped_input::describe);
+            eprintln!(
+                "Error: {shown}: {}",
+                bookokrat::terminal::NO_IMAGES_PDF_MESSAGE
+            );
+            std::process::exit(1);
+        }
+    }
+
+    // Must come before the migration prompt and terminal probes, which read stdin.
+    #[cfg(unix)]
+    if let Err(e) = piped_input::reattach_stdin_to_tty() {
+        eprintln!("Error: {e:#}");
+        std::process::exit(1);
     }
 
     info!("Starting Bookokrat EPUB reader");
@@ -307,20 +367,18 @@ fn main() -> Result<()> {
             caps.env.kitty_pid,
             caps.env.wezterm_executable,
         );
-        if caps.env.tmux {
+        if caps.env.tmux && !terminal::images_disabled() {
             bookokrat::pdf::kittyv2::set_tmux(true);
-            // Only Kitty currently handles Unicode-placeholder-relative
-            // placements correctly through tmux. Ghostty+tmux advertises the
-            // Kitty protocol, but this anchor path misplaces/leaks pages there.
-            bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(
-                caps.kind == terminal::TerminalKind::Kitty,
-            );
             terminal::enable_tmux_passthrough();
-        } else {
-            bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(false);
         }
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));
+        let _ = terminal::probe_kitty_relative_placement_support(&caps);
+        let tmux_anchors = terminal::supports_tmux_placeholder_anchors(&caps);
+        if caps.env.tmux {
+            info!("tmux placeholder anchors: {tmux_anchors}");
+        }
+        bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(tmux_anchors);
 
         // SGR-pixel mouse (?1016) is supported by Kitty and Ghostty. Skip under
         // tmux: it intercepts mouse reporting and forwards cell coordinates,
@@ -363,9 +421,7 @@ fn main() -> Result<()> {
     };
 
     // Create app and run it
-    let book_directory = args
-        .file
-        .as_deref()
+    let book_directory = library_file
         .and_then(|path| Path::new(path).parent())
         .and_then(|parent| {
             if parent.as_os_str().is_empty() {
@@ -378,7 +434,7 @@ fn main() -> Result<()> {
 
     // In test mode: no auto-load, ephemeral bookmarks
     let auto_load_recent =
-        should_auto_load_recent(args.file.as_deref(), args.test_mode, args.continue_reading);
+        should_auto_load_recent(file.as_deref(), args.test_mode, args.continue_reading);
     let (bookmark_file, comments_dir) = if args.test_mode {
         (None, None)
     } else if let Ok(ref paths) = lib_paths {
@@ -389,22 +445,8 @@ fn main() -> Result<()> {
     } else {
         (Some("bookmarks.json".to_string()), None)
     };
-    // Show loading indicator so the user knows the app isn't stuck
-    // (Calibre library scans can take a few seconds)
-    terminal.draw(|frame| {
-        let area = frame.area();
-        let y = area.height / 2;
-        let centered = ratatui::layout::Rect::new(0, y, area.width, 1);
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new("Scanning library...")
-                .alignment(ratatui::layout::Alignment::Center)
-                .style(ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray)),
-            centered,
-        );
-    })?;
-
     let image_cache_dir = lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone());
-    let mut app = App::new_with_config_and_settings(
+    let mut app = App::new_with_background_library_scan(
         book_directory,
         bookmark_file.as_deref(),
         auto_load_recent,
@@ -430,7 +472,7 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-    } else if let Some(path) = args.file.as_deref() {
+    } else if let Some(path) = file.as_deref() {
         let position = if let Some(ch) = args.chapter {
             if ch == 0 {
                 eprintln!("Error: chapter number must be 1 or greater");
@@ -446,10 +488,25 @@ fn main() -> Result<()> {
         } else {
             None
         };
-        if let Err(err) = app.open_book_for_reading_by_path(path, position) {
+        let piped_library = Path::new(path)
+            .parent()
+            .filter(|_| piped && !args.test_mode)
+            .and_then(|dir| match library::resolve_library_paths(dir) {
+                Ok(paths) => Some(paths.bookmarks_file.to_string_lossy().into_owned()),
+                Err(e) => {
+                    warn!("Failed to resolve the piped documents library: {e}");
+                    None
+                }
+            });
+        let opened = match piped_library {
+            Some(bookmarks) => app.open_book_for_reading_in_library(path, &bookmarks, position),
+            None => app.open_book_for_reading_by_path(path, position),
+        };
+        if let Err(err) = opened {
             error!("Failed to open requested book: {err}");
             panic_handler::restore_terminal();
-            eprintln!("Error: failed to open {path}: {err}");
+            let shown = args.file.as_deref().map_or(path, piped_input::describe);
+            eprintln!("Error: failed to open {shown}: {err}");
             std::process::exit(1);
         }
     }

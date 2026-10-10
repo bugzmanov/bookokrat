@@ -131,6 +131,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn preload_image_dimensions(&mut self, book_images: &BookImages) {
+        if self.images_disabled {
+            return;
+        }
         self.image_source = Some(book_images.clone());
         if let Some(doc) = self.markdown_document.clone() {
             self.background_loader.cancel_loading();

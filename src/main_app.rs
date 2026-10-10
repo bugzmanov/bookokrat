@@ -3,6 +3,7 @@ use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::{BookStat, BookStatAction};
 use crate::bookmarks::Bookmarks;
 use crate::comments::BookComments;
+use crate::dialog_anchor_migration::DialogAnchorMap;
 use crate::epub_analysis::{AnalyzedChapter, analyze_epub};
 use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
@@ -99,6 +100,7 @@ pub enum OpenPosition {
     Page(usize),
 }
 
+use std::collections::HashMap;
 use std::io::{BufReader, IsTerminal, stdout};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "pdf")]
@@ -137,6 +139,9 @@ struct EpubBook {
     epub: EpubDoc<BufReader<std::fs::File>>,
     chapter_node_counts: ChapterNodeCounts,
     initial_chapter_analysis: Option<AnalyzedChapter>,
+    /// Chapters whose blocks moved when dialog lines stopped being merged,
+    /// keyed by chapter index. Used to resolve marks saved by older releases.
+    dialog_anchor_maps: HashMap<usize, DialogAnchorMap>,
 }
 impl EpubBook {
     fn new(
@@ -144,12 +149,14 @@ impl EpubBook {
         doc: EpubDoc<BufReader<std::fs::File>>,
         chapter_node_counts: ChapterNodeCounts,
         initial_chapter_analysis: Option<AnalyzedChapter>,
+        dialog_anchor_maps: HashMap<usize, DialogAnchorMap>,
     ) -> Self {
         Self {
             file,
             epub: doc,
             chapter_node_counts,
             initial_chapter_analysis,
+            dialog_anchor_maps,
         }
     }
 
@@ -581,14 +588,15 @@ impl App {
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
     ) -> Self {
+        let settings = Self::default_runtime_settings();
         Self::new_with_config_and_executor(
-            book_directory,
+            BookManager::new_with_directory(book_directory.unwrap_or("."), settings.clone()),
             bookmark_file,
             auto_load_recent,
             Box::new(system_executor),
             comments_dir,
             image_cache_dir,
-            Self::default_runtime_settings(),
+            settings,
         )
     }
 
@@ -599,14 +607,15 @@ impl App {
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
     ) -> Self {
+        let settings = Self::default_runtime_settings();
         Self::new_with_config_and_executor(
-            book_directory,
+            BookManager::new_with_directory(book_directory.unwrap_or("."), settings.clone()),
             bookmark_file,
             auto_load_recent,
             Box::new(RealSystemCommandExecutor),
             comments_dir,
             image_cache_dir,
-            Self::default_runtime_settings(),
+            settings,
         )
     }
 
@@ -621,7 +630,31 @@ impl App {
         settings: settings::RuntimeSettings,
     ) -> Self {
         Self::new_with_config_and_executor(
-            book_directory,
+            BookManager::new_with_directory(book_directory.unwrap_or("."), settings.clone()),
+            bookmark_file,
+            auto_load_recent,
+            Box::new(RealSystemCommandExecutor),
+            comments_dir,
+            image_cache_dir,
+            settings,
+        )
+    }
+
+    /// Like `new_with_config_and_settings`, but scans the library on a
+    /// background thread so a large library doesn't delay startup.
+    pub fn new_with_background_library_scan(
+        book_directory: Option<&str>,
+        bookmark_file: Option<&str>,
+        auto_load_recent: bool,
+        comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
+        settings: settings::RuntimeSettings,
+    ) -> Self {
+        Self::new_with_config_and_executor(
+            BookManager::new_with_directory_in_background(
+                book_directory.unwrap_or("."),
+                settings.clone(),
+            ),
             bookmark_file,
             auto_load_recent,
             Box::new(RealSystemCommandExecutor),
@@ -632,7 +665,7 @@ impl App {
     }
 
     fn new_with_config_and_executor(
-        book_directory: Option<&str>,
+        book_manager: BookManager,
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
         system_executor: Box<dyn SystemCommandExecutor>,
@@ -640,11 +673,6 @@ impl App {
         image_cache_dir: Option<PathBuf>,
         settings: settings::RuntimeSettings,
     ) -> Self {
-        let book_manager = match book_directory {
-            Some(dir) => BookManager::new_with_directory(dir, settings.clone()),
-            None => BookManager::new_with_directory(".", settings.clone()),
-        };
-
         #[cfg(feature = "pdf")]
         let (book_manager, startup_caps) = {
             let startup_caps = crate::terminal::detect_terminal_with_probe();
@@ -669,7 +697,12 @@ impl App {
         #[cfg(any(test, feature = "test-utils"))]
         let mut text_reader = MarkdownTextReader::new_without_image_support(settings.clone());
         #[cfg(not(any(test, feature = "test-utils")))]
-        let mut text_reader = MarkdownTextReader::new(settings.clone());
+        let mut text_reader = if crate::terminal::images_disabled() {
+            MarkdownTextReader::new_without_image_support(settings.clone())
+        } else {
+            MarkdownTextReader::new(settings.clone())
+        };
+        text_reader.set_images_disabled(crate::terminal::images_disabled());
         let initial_settings = settings.load();
         text_reader.set_margin(initial_settings.margin);
         text_reader.set_justify_text(initial_settings.justify_text);
@@ -805,15 +838,19 @@ impl App {
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode without Kitty protocol)
+        // --no-images hides the real capabilities; don't persist a downgrade.
         #[cfg(feature = "pdf")]
-        app.settings
-            .fix_incompatible_pdf_settings(startup_caps.pdf.supports_scroll_mode);
+        if !crate::terminal::images_disabled() {
+            app.settings
+                .fix_incompatible_pdf_settings(startup_caps.pdf.supports_scroll_mode);
+        }
 
         let is_first_time_user = app.home_bookmarks().get_most_recent().is_none();
 
         if auto_load_recent
             && let Some((recent_path, _)) = app.home_bookmarks().get_most_recent()
             && app.book_manager.contains_book(&recent_path)
+            && !Self::blocked_by_no_images(&recent_path)
         {
             if let Err(e) = app.open_book_for_reading_by_path(&recent_path, None) {
                 error!("Failed to auto-load most recent book: {e}");
@@ -983,6 +1020,23 @@ impl App {
         }
     }
 
+    /// PDF and DjVu pages are images, so `--no-images` makes them unopenable.
+    fn blocked_by_no_images(path: &str) -> bool {
+        #[cfg(feature = "pdf")]
+        {
+            crate::terminal::images_disabled()
+                && matches!(
+                    BookManager::detect_format(path),
+                    Some(BookFormat::Pdf | BookFormat::Djvu)
+                )
+        }
+        #[cfg(not(feature = "pdf"))]
+        {
+            let _ = path;
+            false
+        }
+    }
+
     /// Open a book for reading by index - delegates to path-based opening
     pub fn open_book_for_reading(&mut self, book_index: usize) -> Result<()> {
         if let Some(book_info) = self.book_manager.get_book_info(book_index) {
@@ -1006,8 +1060,18 @@ impl App {
         path: &str,
         source_bookmarks: &str,
     ) -> Result<()> {
+        self.open_book_for_reading_in_library(path, source_bookmarks, None)
+    }
+
+    /// Open a book whose bookmarks and comments belong to the library of `source_bookmarks`.
+    pub fn open_book_for_reading_in_library(
+        &mut self,
+        path: &str,
+        source_bookmarks: &str,
+        position: Option<OpenPosition>,
+    ) -> Result<()> {
         let context_override = self.context_override_for_source_bookmarks(source_bookmarks)?;
-        self.open_book_for_reading_with_context(path, context_override, None)
+        self.open_book_for_reading_with_context(path, context_override, position)
     }
 
     fn open_book_for_reading_with_context(
@@ -1035,6 +1099,9 @@ impl App {
     ) -> Result<()> {
         let format = BookManager::detect_format(path)
             .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
+        if Self::blocked_by_no_images(path) {
+            anyhow::bail!(crate::terminal::NO_IMAGES_PDF_MESSAGE);
+        }
 
         match (&format, &position) {
             (BookFormat::Epub | BookFormat::Html, Some(OpenPosition::Page(_))) => {
@@ -1216,12 +1283,14 @@ impl App {
         self.jump_list.clear();
 
         let path_buf = std::path::PathBuf::from(path);
-        if let Err(e) = self.book_images.load_book(&path_buf) {
-            error!("Failed to load book in BookImages: {e}");
+        if !crate::terminal::images_disabled() {
+            if let Err(e) = self.book_images.load_book(&path_buf) {
+                error!("Failed to load book in BookImages: {e}");
+            }
         }
 
         // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state
-        let comments = if ignore_bookmarks {
+        let mut comments = if ignore_bookmarks {
             BookComments::new_empty()
         } else {
             match BookComments::new(&path_buf, self.current_book_comments_dir()) {
@@ -1232,11 +1301,10 @@ impl App {
                 }
             }
         };
-        let comments_arc = Arc::new(Mutex::new(comments));
-        self.text_reader.set_book_comments(comments_arc);
 
         // Variables to store position to restore after content is loaded
         let mut node_to_restore = None;
+        let mut bookmark_in_legacy_layout = false;
 
         if !ignore_bookmarks
             && let Some(bookmark) = self.current_book_bookmarks().get_bookmark(path)
@@ -1254,6 +1322,7 @@ impl App {
 
                 if let Some(node_idx) = bookmark.node_index {
                     node_to_restore = Some(node_idx);
+                    bookmark_in_legacy_layout = bookmark.anchor_layout.is_none();
                 }
             } else {
                 warn!("Could not find chapter for href: {}", bookmark.chapter_href);
@@ -1288,6 +1357,45 @@ impl App {
 
         let initial_chapter = doc.get_current_chapter();
         let analysis = analyze_epub(&mut doc, initial_chapter);
+
+        let mut moved_to_new_layout = false;
+        if comments.has_legacy_layout_comments() {
+            let chapter_by_href: HashMap<String, usize> = (0..doc.get_num_chapters())
+                .filter_map(|index| Self::get_chapter_href(&doc, index).map(|href| (href, index)))
+                .collect();
+            match comments.migrate_legacy_layout(|href, target| {
+                let index = *chapter_by_href.get(href)?;
+                let map = analysis.dialog_anchor_maps.get(index)?.as_ref()?;
+                Some(map.map_target(target))
+            }) {
+                Ok(0) => {}
+                Ok(moved) => {
+                    info!("Moved {moved} comments to the unmerged dialog layout");
+                    moved_to_new_layout = true;
+                }
+                Err(e) => {
+                    error!("Failed to save comments moved to the unmerged dialog layout: {e}")
+                }
+            }
+        }
+        if bookmark_in_legacy_layout {
+            if let (Some(node), Some(Some(map))) = (
+                node_to_restore,
+                analysis.dialog_anchor_maps.get(initial_chapter),
+            ) {
+                let mapped = map.map_node(node);
+                if mapped != node {
+                    info!(
+                        "Moved reading position from block {node} to {mapped} for the unmerged dialog layout"
+                    );
+                    node_to_restore = Some(mapped);
+                    moved_to_new_layout = true;
+                }
+            }
+        }
+        self.text_reader
+            .set_book_comments(Arc::new(Mutex::new(comments)));
+
         let mut search_engine = SearchEngine::new();
         search_engine.process_chapters(analysis.search_sections);
         self.book_search = Some(BookSearch::new(search_engine));
@@ -1296,11 +1404,18 @@ impl App {
             counts: analysis.node_counts,
             total: analysis.total_nodes,
         };
+        let dialog_anchor_maps = analysis
+            .dialog_anchor_maps
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, map)| map.filter(|m| !m.is_identity()).map(|m| (index, m)))
+            .collect();
         let mut current_book = EpubBook::new(
             path.to_string(),
             doc,
             chapter_node_counts,
             analysis.initial_chapter,
+            dialog_anchor_maps,
         );
         self.switch_to_toc_mode(&mut current_book);
 
@@ -1309,6 +1424,14 @@ impl App {
 
         if let Some(node_idx) = node_to_restore {
             self.text_reader.restore_to_node_index(node_idx);
+        }
+
+        if moved_to_new_layout {
+            self.notifications.notify_for(
+                "Saved positions updated for the new dialogue layout; older versions will misplace them",
+                crate::notification::NotificationLevel::Info,
+                Duration::from_secs(12),
+            );
         }
 
         // Save initial bookmark with metadata AFTER chapter restoration
@@ -1373,7 +1496,7 @@ impl App {
             None => crate::terminal::detect_terminal_with_probe(),
         };
         crate::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(
-            caps.env.tmux && caps.kind == crate::terminal::TerminalKind::Kitty,
+            crate::terminal::supports_tmux_placeholder_anchors(&caps),
         );
         self.pdf_supports_graphics = caps.supports_graphics;
         self.book_manager.supports_graphics = caps.supports_graphics;
@@ -2018,10 +2141,12 @@ impl App {
                 self.reading_history = None;
             }
             ReadingHistoryAction::OpenBook { path } => {
-                if let Some(book_index) = self.book_manager.find_book_index_by_path(&path) {
+                if self.book_manager.contains_book(&path) {
                     self.set_main_panel_focus(MainPanel::Content);
                     self.reading_history = None;
-                    let _ = self.open_book_for_reading(book_index);
+                    if let Err(e) = self.open_book_for_reading_by_path(&path, None) {
+                        self.show_error(format!("Failed to open book: {e}"));
+                    }
                 }
             }
             ReadingHistoryAction::OpenBookAbsolute {
@@ -3529,6 +3654,7 @@ impl App {
             node_offset,
             snippet,
             chapter_title,
+            anchor_layout: Some(crate::dialog_anchor_migration::CURRENT_ANCHOR_LAYOUT),
         })
     }
 
@@ -3630,21 +3756,34 @@ impl App {
         None
     }
 
+    /// Node and offset of an EPUB mark in the open book's current layout.
+    fn epub_mark_position(&self, mark: &crate::marks::MarkLocation) -> (usize, Option<usize>) {
+        let mark = match (mark, self.current_book.as_ref()) {
+            (crate::marks::MarkLocation::Epub { chapter, .. }, Some(book)) => book
+                .dialog_anchor_maps
+                .get(chapter)
+                .map(|map| map.migrate_mark(mark)),
+            _ => None,
+        }
+        .unwrap_or_else(|| mark.clone());
+        match mark {
+            crate::marks::MarkLocation::Epub {
+                node, node_offset, ..
+            } => (node, node_offset),
+            crate::marks::MarkLocation::Pdf { .. } => (0, None),
+        }
+    }
+
     fn jump_to_mark(&mut self, mark: crate::marks::MarkLocation) {
         let path = mark.path().to_string();
         let path_exists = std::path::Path::new(&path).exists();
         match mark {
-            crate::marks::MarkLocation::Epub {
-                chapter,
-                node,
-                node_offset,
-                ..
-            } => {
+            crate::marks::MarkLocation::Epub { chapter, .. } => {
                 if !path_exists {
                     self.show_error(format!("Book no longer exists: {path}"));
                     return;
                 }
-                let mut jumped = false;
+                let mut jumped = None;
                 if self.current_book.as_ref().map(|x| &x.file) == Some(&path) {
                     self.save_to_jump_list();
                     if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(chapter) {
@@ -3653,25 +3792,27 @@ impl App {
                             return;
                         }
                     }
+                    let (node, node_offset) = self.epub_mark_position(&mark);
                     match node_offset {
                         Some(off) => self.text_reader.restore_to_node_position(node, off),
                         None => self.text_reader.restore_to_node_index(node),
                     }
                     self.save_bookmark();
-                    jumped = true;
+                    jumped = Some((node, node_offset));
                 } else if let Err(e) =
                     self.open_book_for_reading_by_path(&path, Some(OpenPosition::Chapter(chapter)))
                 {
                     self.show_error(format!("Failed to open '{path}': {e}"));
                 } else {
+                    let (node, node_offset) = self.epub_mark_position(&mark);
                     match node_offset {
                         Some(off) => self.text_reader.restore_to_node_position(node, off),
                         None => self.text_reader.restore_to_node_index(node),
                     }
                     self.save_bookmark();
-                    jumped = true;
+                    jumped = Some((node, node_offset));
                 }
-                if jumped {
+                if let Some((node, node_offset)) = jumped {
                     let duration = std::time::Duration::from_millis(1500);
                     match node_offset {
                         Some(off) => self
@@ -4010,19 +4151,7 @@ impl App {
                 };
                 self.settings
                     .update(|settings| settings.book_sort_order = new_order);
-                let current_path = self.navigation_panel.current_book_path.clone();
-                self.navigation_panel
-                    .book_list
-                    .set_books(self.book_manager.get_books());
-                if let Some(ref path) = current_path {
-                    if let Some(idx) = self
-                        .navigation_panel
-                        .book_list
-                        .find_book_index_by_path(path)
-                    {
-                        self.navigation_panel.book_list.set_selection_to_index(idx);
-                    }
-                }
+                self.reload_book_list();
                 let label = match new_order {
                     BookSortOrder::ByName => "by name",
                     BookSortOrder::ByType => "by type",
@@ -5423,11 +5552,8 @@ impl App {
                 self.apply_theme_to_pdf_reader();
                 self.show_info(format!("Theme: {}", current_theme_name()));
 
-                // Refresh book list in case PDF support was toggled
-                self.book_manager.refresh();
-                self.navigation_panel
-                    .book_list
-                    .set_books(self.book_manager.get_books());
+                // Re-filter the book list in case PDF support was toggled
+                self.reload_book_list();
 
                 #[cfg(feature = "pdf")]
                 {
@@ -7447,6 +7573,35 @@ impl App {
         false
     }
 
+    /// Reloads the book list from the book manager, keeping the open book selected.
+    fn reload_book_list(&mut self) {
+        self.navigation_panel
+            .book_list
+            .set_books(self.book_manager.get_books());
+        if let Some(ref path) = self.navigation_panel.current_book_path
+            && let Some(idx) = self
+                .navigation_panel
+                .book_list
+                .find_book_index_by_path(path)
+        {
+            self.navigation_panel.book_list.set_selection_to_index(idx);
+        }
+    }
+
+    fn poll_library_scan(&mut self) -> bool {
+        let Some(result) = self.book_manager.poll_scan() else {
+            return false;
+        };
+        match result {
+            Ok(()) => self.reload_book_list(),
+            Err(e) => {
+                error!("Library scan failed: {e}");
+                self.show_error(format!("Failed to scan library: {e}"));
+            }
+        }
+        true
+    }
+
     /// Poll the synctex channel for commands from editors. Returns true if a command was processed.
     #[cfg(feature = "pdf")]
     fn poll_synctex_commands(&mut self) -> bool {
@@ -8422,6 +8577,9 @@ where
             #[cfg(feature = "pdf")]
             let pdf_mark_jump_expired = app.tick_pdf_mark_jump_highlight();
             let pdf_renders_ready = app.poll_pdf_renders();
+            if app.poll_library_scan() {
+                needs_redraw = true;
+            }
             if images_loaded {
                 needs_redraw = true;
                 debug!("Images loaded, forcing redraw");
@@ -8637,6 +8795,373 @@ mod tests {
         assert!(
             book_b_bm.chapter_index.is_some(),
             "book_b's bookmark in other_bm must have been updated by the -c session"
+        );
+    }
+
+    fn write_epub(path: &std::path::Path, chapters: &[String]) {
+        use std::io::Write;
+        use zip::write::FileOptions;
+
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        zip.start_file(
+            "mimetype",
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(b"application/epub+zip").unwrap();
+        zip.start_file("META-INF/container.xml", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>"#,
+        )
+        .unwrap();
+
+        let mut manifest = String::new();
+        let mut spine = String::new();
+        let mut nav = String::new();
+        for i in 1..=chapters.len() {
+            manifest.push_str(&format!(
+                r#"<item id="chapter{i}" href="chapter{i}.xhtml" media-type="application/xhtml+xml"/>"#
+            ));
+            spine.push_str(&format!(r#"<itemref idref="chapter{i}"/>"#));
+            nav.push_str(&format!(
+                r#"<navPoint id="np{i}" playOrder="{i}"><navLabel><text>Chapter {i}</text></navLabel><content src="chapter{i}.xhtml"/></navPoint>"#
+            ));
+        }
+        zip.start_file("OEBPS/content.opf", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
+    <metadata>
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Dialogue</dc:title>
+        <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="BookId">dialogue</dc:identifier>
+        <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">es</dc:language>
+    </metadata>
+    <manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>{manifest}</manifest>
+    <spine toc="ncx">{spine}</spine>
+</package>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.start_file("OEBPS/toc.ncx", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head><meta name="dtb:uid" content="dialogue"/></head>
+    <docTitle><text>Dialogue</text></docTitle>
+    <navMap>{nav}</navMap>
+</ncx>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        for (i, body) in chapters.iter().enumerate() {
+            zip.start_file(
+                format!("OEBPS/chapter{}.xhtml", i + 1),
+                FileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter {}</title></head><body>{body}</body></html>"#,
+                    i + 1
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    fn draw_app(app: &mut App) {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        for _ in 0..2 {
+            terminal.draw(|f| app.draw(f, &FPSCounter::new())).unwrap();
+        }
+    }
+
+    fn layout_notice_shown(app: &App) -> bool {
+        app.notifications
+            .all()
+            .iter()
+            .any(|n| n.message.contains("dialogue layout"))
+    }
+
+    /// Opening a book whose comments, reading position and marks were saved
+    /// by a release that merged consecutive dialog lines into one block.
+    #[test]
+    fn opening_a_book_moves_positions_saved_by_older_releases() {
+        let d1 = "—De esa manera, ¿verdad es que hay historia mía?";
+        let d2 = "—Es tan verdad, señor —dijo Sansón—, que tengo para mí que hoy están impresos más de doce mil libros.";
+        let d3 = "—Una de las cosas —dijo don Quijote— que más debe de dar contento a un hombre virtuoso.";
+        let d5 = "—¿Y qué dicen de mí?";
+        // New blocks: 0 narration | 1-3 dialog | 4 narration | 5-6 dialog | 7.. filler
+        // Old blocks: 0 narration | 1 [1-3]    | 2 narration | 3 [5-6]    | 4.. filler
+        let mut dialogue = format!(
+            "<p>Hízole levantar don Quijote y dijo:</p><p>{d1}</p><p>{d2}</p><p>{d3}</p>\
+             <p>Calló el bachiller, y don Quijote quedó pensativo.</p><p>{d5}</p><p>—Muchas cosas.</p>"
+        );
+        for i in 0..60 {
+            dialogue.push_str(&format!("<p>Párrafo de relleno número {i}.</p>"));
+        }
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let book = dir.path().join("dialogue.epub");
+        write_epub(
+            &book,
+            &["<p>Prólogo sin diálogos.</p>".to_string(), dialogue],
+        );
+        let book = std::fs::canonicalize(&book).unwrap();
+        let book_str = book.to_str().unwrap();
+        let comments_dir = dir.path().join("comments");
+        let comments_file = BookComments::new(&book, Some(&comments_dir))
+            .unwrap()
+            .file_path;
+        let bookmarks_file = dir.path().join("bookmarks.json");
+        let chapter = "OEBPS/chapter2.xhtml";
+
+        let len = |s: &str| s.chars().count();
+        let third_line = len(d1) + 1 + len(d2) + 1;
+        std::fs::write(
+            &comments_file,
+            format!(
+                r#"- id: hl
+  chapter_href: {chapter}
+  annotation_type: highlight
+  color: yellow
+  target_type: text
+  node_index: 1
+  subtarget_kind: paragraph
+  word_range: [{}, {}]
+  updated_at: 2025-06-01T12:00:00Z
+- id: after
+  chapter_href: {chapter}
+  target_type: text
+  node_index: 2
+  subtarget_kind: paragraph
+  content: after the dialogue
+  updated_at: 2025-06-01T12:00:00Z
+- id: filler
+  chapter_href: {chapter}
+  target_type: text
+  node_index: 10
+  subtarget_kind: paragraph
+  word_range: [0, 7]
+  content: filler
+  updated_at: 2025-06-01T12:00:00Z
+"#,
+                third_line + 1,
+                third_line + 17
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &bookmarks_file,
+            serde_json::json!({
+                "books": {
+                    book_str: {
+                        "chapter_href": chapter,
+                        "node_index": 2,
+                        "chapter_index": 1,
+                        "total_chapters": 2,
+                        "last_read": "2025-06-01T12:00:00Z",
+                        "marks": {
+                            "a": {
+                                "kind": "epub",
+                                "path": book_str,
+                                "chapter": 1,
+                                "node": 3,
+                                "node_offset": len(d5)
+                            }
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let new_app = |cache: &str| {
+            App::new_with_config(
+                Some(dir.path().to_str().unwrap()),
+                Some(bookmarks_file.to_str().unwrap()),
+                false,
+                Some(&comments_dir),
+                Some(dir.path().join(cache)),
+            )
+        };
+
+        // --- First open after upgrading ---
+        let mut app = new_app("img_cache");
+        app.open_book_for_reading_by_path(book_str, None).unwrap();
+        assert!(layout_notice_shown(&app));
+
+        draw_app(&mut app);
+        assert_eq!(
+            app.text_reader.get_current_node_index(),
+            4,
+            "reading position must stay on the narration after the first dialogue"
+        );
+
+        let comments = BookComments::new(&book, Some(&comments_dir)).unwrap();
+        assert!(!comments.has_legacy_layout_comments());
+        assert_eq!(
+            comments.get_comment_by_id("hl").unwrap().target,
+            crate::comments::CommentTarget::paragraph(3, Some((1, 17)))
+        );
+        assert_eq!(
+            comments.get_comment_by_id("after").unwrap().target,
+            crate::comments::CommentTarget::paragraph(4, None)
+        );
+        assert_eq!(
+            comments.get_comment_by_id("filler").unwrap().target,
+            crate::comments::CommentTarget::paragraph(13, Some((0, 7)))
+        );
+        let comments_after_first_open = std::fs::read_to_string(&comments_file).unwrap();
+
+        app.save_bookmark_with_throttle(true);
+        let saved =
+            crate::bookmarks::Bookmarks::load_from_file(bookmarks_file.to_str().unwrap()).unwrap();
+        let bookmark = saved.get_bookmark(book_str).unwrap();
+        assert_eq!(bookmark.node_index, Some(4));
+        assert_eq!(
+            bookmark.anchor_layout,
+            Some(crate::dialog_anchor_migration::CURRENT_ANCHOR_LAYOUT)
+        );
+
+        app.goto_mark('a');
+        draw_app(&mut app);
+        assert_eq!(
+            app.text_reader.get_current_node_index(),
+            6,
+            "old mark on the second line of a merged dialogue must land on that line"
+        );
+        app.save_bookmark_with_throttle(true);
+        drop(app);
+
+        // --- Every later open ---
+        let mut app = new_app("img_cache2");
+        app.open_book_for_reading_by_path(book_str, None).unwrap();
+        assert!(!layout_notice_shown(&app));
+        draw_app(&mut app);
+        assert_eq!(app.text_reader.get_current_node_index(), 6);
+        assert_eq!(
+            std::fs::read_to_string(&comments_file).unwrap(),
+            comments_after_first_open
+        );
+        app.goto_mark('a');
+        draw_app(&mut app);
+        assert_eq!(app.text_reader.get_current_node_index(), 6);
+    }
+
+    fn app_for_library(dir: &std::path::Path) -> App {
+        App::new_with_config(
+            Some(dir.to_str().unwrap()),
+            Some(dir.join("bookmarks.json").to_str().unwrap()),
+            false,
+            None,
+            Some(dir.join("img_cache")),
+        )
+    }
+
+    #[test]
+    fn settings_change_does_not_rescan_library() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let existing = dir.path().join("existing.epub");
+        std::fs::write(&existing, b"fake").unwrap();
+        let mut app = app_for_library(dir.path());
+
+        std::fs::write(dir.path().join("added_later.epub"), b"fake").unwrap();
+        app.handle_settings_action(SettingsAction::SettingsChanged);
+
+        let listed: Vec<String> = app
+            .book_manager
+            .get_books()
+            .into_iter()
+            .map(|book| book.path)
+            .collect();
+        assert_eq!(
+            listed,
+            vec![existing.to_str().unwrap().to_string()],
+            "a settings change must not walk the library directory"
+        );
+    }
+
+    #[test]
+    fn settings_change_keeps_background_library_scan_running() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut app = app_for_library(dir.path());
+        let scan = app.book_manager.start_controlled_scan();
+
+        app.handle_settings_action(SettingsAction::SettingsChanged);
+        assert!(
+            app.book_manager.is_scanning(),
+            "a settings change must not cancel the in-flight library scan"
+        );
+
+        let path = dir
+            .path()
+            .join("scanned.epub")
+            .to_str()
+            .unwrap()
+            .to_string();
+        scan.send(Ok(vec![crate::book_manager::BookInfo {
+            path: path.clone(),
+            display_name: "scanned".into(),
+            format: BookFormat::Epub,
+        }]))
+        .unwrap();
+        assert!(app.poll_library_scan());
+        assert_eq!(
+            app.navigation_panel
+                .book_list
+                .find_book_index_by_path(&path),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn settings_change_keeps_open_book_selected_in_book_list() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a", "b", "c"] {
+            create_fake_epub_file(
+                dir.path().join(format!("{name}.epub")),
+                &FakeBookConfig {
+                    title: name.into(),
+                    chapter_count: 1,
+                    words_per_chapter: 20,
+                },
+            )
+            .unwrap();
+        }
+        let mut app = app_for_library(dir.path());
+        let open_path = dir.path().join("c.epub").to_str().unwrap().to_string();
+        app.open_book_for_reading_by_path(&open_path, None).unwrap();
+        app.navigation_panel.switch_to_book_mode();
+        let open_index = app
+            .navigation_panel
+            .book_list
+            .find_book_index_by_path(&open_path)
+            .unwrap();
+        assert_eq!(app.navigation_panel.book_list.selected, open_index);
+        assert_ne!(open_index, 0);
+
+        app.handle_settings_action(SettingsAction::SettingsChanged);
+        assert_eq!(
+            app.navigation_panel.book_list.selected, open_index,
+            "a settings change must not move the book list cursor off the open book"
         );
     }
 }

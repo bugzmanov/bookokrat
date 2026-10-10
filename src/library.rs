@@ -140,6 +140,17 @@ pub fn libraries_data_dir() -> Result<PathBuf> {
     Ok(base_dirs.data_dir.join("bookokrat").join("libraries"))
 }
 
+/// Return the cache directory holding copies of documents read from stdin.
+/// It is also their library, so their bookmarks and comments live together.
+/// Creates the directory if it doesn't exist.
+pub fn piped_documents_dir() -> Result<PathBuf> {
+    let base_dirs = BaseDirs::from_system()?;
+    let dir = base_dirs.cache_dir.join("bookokrat").join("stdin");
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create piped documents directory: {dir:?}"))?;
+    Ok(dir)
+}
+
 /// Return the path to the global marks file (cross-library, uppercase A-Z marks).
 /// Creates the parent directory if it doesn't exist.
 pub fn global_marks_file() -> Result<PathBuf> {

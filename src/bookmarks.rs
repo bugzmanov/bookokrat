@@ -1,3 +1,4 @@
+use crate::dialog_anchor_migration::CURRENT_ANCHOR_LAYOUT;
 use crate::marks::MarkLocation;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -58,6 +59,11 @@ pub struct Bookmark {
     /// lowercase letter and points back to a position inside this book.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub marks: Option<HashMap<char, MarkLocation>>,
+
+    /// Layout `node_index` was recorded against; `None` means the
+    /// merged-dialog layout of releases up to 0.3.12.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub anchor_layout: Option<u32>,
 }
 
 // JSON shape:
@@ -335,6 +341,7 @@ impl Bookmarks {
                 absolute_path,
                 toc_expansion_state,
                 marks,
+                anchor_layout: Some(CURRENT_ANCHOR_LAYOUT),
             },
         );
 
@@ -392,6 +399,7 @@ impl Bookmarks {
                     absolute_path,
                     toc_expansion_state: None,
                     marks: None,
+                    anchor_layout: Some(CURRENT_ANCHOR_LAYOUT),
                 },
             );
         }

@@ -243,6 +243,10 @@ pub struct MarkdownTextReader {
     /// tests render identically regardless of the host terminal.
     underline_color_enabled: bool,
 
+    /// `--no-images`: images render as a one-line `[image: ...]` label and are
+    /// never loaded.
+    images_disabled: bool,
+
     /// Two-column (book spread) layout state.
     dual: DualState,
 
@@ -319,7 +323,6 @@ impl MarkdownTextReader {
         Self::with_image_picker(image_picker, settings)
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn new_without_image_support(settings: RuntimeSettings) -> Self {
         Self::with_image_picker(None, settings)
     }
@@ -384,6 +387,7 @@ impl MarkdownTextReader {
             content_margin: 0,
             justify_text: false,
             underline_color_enabled: true,
+            images_disabled: false,
             dual: DualState::default(),
             normal_mode: NormalModeState::new(),
             hud_message: None,
@@ -1827,6 +1831,13 @@ impl MarkdownTextReader {
     pub fn set_underline_color_enabled(&mut self, enabled: bool) {
         if self.underline_color_enabled != enabled {
             self.underline_color_enabled = enabled;
+            self.cache_generation += 1;
+        }
+    }
+
+    pub fn set_images_disabled(&mut self, disabled: bool) {
+        if self.images_disabled != disabled {
+            self.images_disabled = disabled;
             self.cache_generation += 1;
         }
     }

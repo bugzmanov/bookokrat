@@ -154,14 +154,15 @@ impl MemoryRegion {
             flags |= libc::O_EXCL;
         }
 
-        // Open with read/write, create, owner read+write (0600)
-        let fd = unsafe {
-            libc::shm_open(
-                c_path.as_ptr(),
-                flags,
-                (libc::S_IRUSR | libc::S_IWUSR) as libc::c_uint,
-            )
-        };
+        // Open with read/write, create, owner read+write (0600).
+        // Apple declares shm_open as variadic, so mode must be promoted to c_uint;
+        // elsewhere it takes mode_t (u16 on FreeBSD, u32 on Linux).
+        #[cfg(target_vendor = "apple")]
+        let mode = (libc::S_IRUSR | libc::S_IWUSR) as libc::c_uint;
+        #[cfg(not(target_vendor = "apple"))]
+        let mode = libc::S_IRUSR | libc::S_IWUSR;
+
+        let fd = unsafe { libc::shm_open(c_path.as_ptr(), flags, mode) };
 
         if fd < 0 {
             return Err(Error::last_os_error());

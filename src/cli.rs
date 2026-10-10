@@ -6,7 +6,7 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// EPUB or PDF file to open
+    /// EPUB or PDF file to open, or - to read it from stdin
     pub file: Option<String>,
 
     /// Directory to use as the library (defaults to current directory)
@@ -24,6 +24,10 @@ pub struct Cli {
     /// Hide sidebar, show content only
     #[arg(long)]
     pub zen_mode: bool,
+
+    /// Don't display images (text only); PDF and DjVu files can't be opened
+    #[arg(long)]
+    pub no_images: bool,
 
     /// Open the most recently read book across all libraries
     #[arg(long, short = 'c')]
@@ -51,7 +55,7 @@ pub struct Cli {
 pub enum Command {
     /// Print book content, TOC, or metadata to stdout
     Print {
-        /// EPUB or PDF file
+        /// EPUB or PDF file, or - to read it from stdin
         file: String,
 
         /// Print table of contents
@@ -74,7 +78,7 @@ pub enum Command {
     /// Extract an EPUB into a canonical directory of markdown chapters,
     /// images, ToC, and metadata for use by downstream tools.
     Extract {
-        /// EPUB file
+        /// EPUB file, or - to read it from stdin
         file: String,
 
         /// Output directory (created if missing)

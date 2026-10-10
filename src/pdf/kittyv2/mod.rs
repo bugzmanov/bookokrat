@@ -383,6 +383,9 @@ fn place_image_relative_to_tmux_anchor(
 
 /// Delete all images.
 pub fn delete_all_images() -> io::Result<()> {
+    if crate::terminal::images_disabled() {
+        return Ok(());
+    }
     let mut stdout = io::stdout();
     let tmux = is_tmux_mode();
     DeleteCommand::all()
@@ -510,6 +513,71 @@ pub fn probe_delete_range_support() -> bool {
     ok_a && ok_b
 }
 
+/// Probes whether the terminal implements Kitty relative placements (`P=`/`Q=`).
+///
+/// Places a probe image relative to a parent that does not exist. Terminals
+/// that implement relative placements reject it with `ENOPARENT`; terminals
+/// that only parse the keys (Ghostty 1.3.1 and earlier) place it normally and
+/// answer `OK`.
+pub fn probe_relative_placement_support() -> bool {
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
+    const PROBE_IMAGE_ID: u32 = 90003;
+    const MISSING_PARENT_ID: u32 = 90004;
+
+    let _ = enable_raw_mode();
+
+    let mut stdout = io::stdout();
+    let tmux = is_tmux_mode();
+
+    let _ = DirectTransmit::new(1, 1)
+        .format(Format::Rgb)
+        .image_id(PROBE_IMAGE_ID)
+        .placement_id(PROBE_IMAGE_ID)
+        .quiet(Quiet::ErrorsOnly)
+        .no_cursor_move(true)
+        .send(&mut stdout, &[0u8, 0, 0], tmux);
+
+    let sent = DisplayCommand::new(PROBE_IMAGE_ID)
+        .placement_id(PROBE_IMAGE_ID)
+        .no_cursor_move(true)
+        .relative_to(MISSING_PARENT_ID, 1, 0, 0)
+        .write_to(&mut stdout, tmux)
+        .and_then(|()| stdout.flush());
+
+    let response = match sent {
+        Ok(()) => read_response_matching(PROBE_TIMEOUT, |response| {
+            response.image_id == Some(PROBE_IMAGE_ID)
+        }),
+        Err(err) => Err(err),
+    };
+
+    let _ = DeleteCommand::by_id(PROBE_IMAGE_ID)
+        .delete()
+        .quiet(Quiet::Silent)
+        .write_to(&mut stdout, tmux);
+    let _ = stdout.flush();
+
+    let _ = disable_raw_mode();
+
+    match response {
+        Ok(Some(response)) => {
+            log::info!(
+                "Kitty relative placement probe response: {:?}",
+                response.message
+            );
+            response.message.starts_with("ENOPARENT")
+        }
+        Ok(None) => {
+            log::warn!("Kitty relative placement probe timed out");
+            false
+        }
+        Err(err) => {
+            log::warn!("Kitty relative placement probe failed: {err}");
+            false
+        }
+    }
+}
+
 fn display_and_check(stdout: &mut io::Stdout, id: u32, timeout: Duration) -> bool {
     let cmd = DisplayCommand::new(id)
         .placement_id(id)
@@ -528,6 +596,15 @@ fn display_and_check(stdout: &mut io::Stdout, id: u32, timeout: Duration) -> boo
 }
 
 fn read_response_with_timeout(timeout: Duration) -> io::Result<Option<kgfx::Response>> {
+    read_response_matching(timeout, |_| true)
+}
+
+/// Reads graphics responses until one satisfies `accept`, skipping stale
+/// replies (e.g. a late answer to an earlier probe that timed out).
+fn read_response_matching(
+    timeout: Duration,
+    accept: impl Fn(&kgfx::Response) -> bool,
+) -> io::Result<Option<kgfx::Response>> {
     let mut stdin = io::stdin();
     let fd = stdin.as_raw_fd();
     let start = Instant::now();
@@ -562,8 +639,14 @@ fn read_response_with_timeout(timeout: Duration) -> io::Result<Option<kgfx::Resp
         }
         buffer.extend_from_slice(&chunk[..read]);
 
-        if let Some(response) = kgfx::parse_response(&buffer) {
-            return Ok(Some(response));
+        while let Some(response) = kgfx::parse_response(&buffer) {
+            if accept(&response) {
+                return Ok(Some(response));
+            }
+            let Some(end) = buffer.windows(2).position(|w| w == b"\x1b\\") else {
+                break;
+            };
+            buffer.drain(..end + 2);
         }
     }
 }

@@ -2977,6 +2977,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             absolute_path: None,
             toc_expansion_state: None,
             marks: None,
+            anchor_layout: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -3002,6 +3003,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             absolute_path: None,
             toc_expansion_state: None,
             marks: None,
+            anchor_layout: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -4867,6 +4869,97 @@ fn test_epub_highlights_all_colors_svg() {
         std::path::Path::new("tests/snapshots/epub_highlights_all_colors.svg"),
         "test_epub_highlights_all_colors_svg",
         create_test_failure_handler("test_epub_highlights_all_colors_svg"),
+    );
+}
+
+/// Highlights made on text after a `<br>` must cover exactly the selected
+/// words. Line starts after a line break used to be computed as if the break
+/// took no space, and every wrapped line after it drifted one more character.
+#[test]
+#[parallel]
+fn test_epub_highlight_after_line_break_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_line_break_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Highlight After Line Break Test</title>
+</head>
+<body>
+    <p>The woods are lovely, dark and deep,<br/>But I have promises to keep,<br/>And miles to go before I sleep,<br/>And miles to go before I sleep.</p>
+    <p>A short opening line.<br/>Then a long line that keeps going well past the edge of the reading column, so that it has to wrap onto several more lines, and the words picked out near its end are where the highlight should land.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let base_time = Utc.with_ymd_and_hms(2024, 2, 1, 9, 0, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "highlight_line_break_test.html".to_string());
+    let specs = [
+        ("promises", HighlightColor::Yellow),
+        ("before I sleep.", HighlightColor::Green),
+        ("land.", HighlightColor::Blue),
+    ];
+
+    for (idx, (needle, color)) in specs.iter().enumerate() {
+        let (start_line, start_col, end_line, end_col) =
+            selection_for_text(app.testing_rendered_lines(), needle, needle.chars().count());
+        let target = app
+            .testing_comment_target_for_selection(start_line, start_col, end_line, end_col)
+            .unwrap_or_else(|| panic!("missing highlight target for {needle}"));
+        app.testing_add_comment(Comment::new_highlight(
+            chapter_href.clone(),
+            target,
+            *color,
+            base_time + chrono::Duration::minutes(idx as i64),
+            Some((*needle).to_string()),
+        ));
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_highlight_after_line_break.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_highlight_after_line_break.svg"),
+        "test_epub_highlight_after_line_break_svg",
+        create_test_failure_handler("test_epub_highlight_after_line_break_svg"),
     );
 }
 

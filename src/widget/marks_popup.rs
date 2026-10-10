@@ -587,6 +587,7 @@ mod tests {
             node_offset: None,
             snippet: snippet.map(|s| s.to_string()),
             chapter_title: None,
+            anchor_layout: None,
         }
     }
 

@@ -32,6 +32,10 @@ pub enum MarkLocation {
         /// popup.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         chapter_title: Option<String>,
+        /// Layout `node`/`node_offset` were recorded against; `None` means the
+        /// merged-dialog layout of releases up to 0.3.12.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor_layout: Option<u32>,
     },
     Pdf {
         path: String,
@@ -82,6 +86,7 @@ impl MarkLocation {
                 node_offset,
                 snippet,
                 chapter_title,
+                anchor_layout,
                 ..
             } => Self::Epub {
                 path: new_path,
@@ -90,6 +95,7 @@ impl MarkLocation {
                 node_offset,
                 snippet,
                 chapter_title,
+                anchor_layout,
             },
             Self::Pdf {
                 page,
@@ -288,6 +294,7 @@ mod tests {
             snippet: None,
             node_offset: None,
             chapter_title: None,
+            anchor_layout: None,
         };
         let json = serde_json::to_string(&loc).unwrap();
         let parsed: MarkLocation = serde_json::from_str(&json).unwrap();
@@ -332,6 +339,7 @@ mod tests {
                 snippet: None,
                 node_offset: None,
                 chapter_title: None,
+                anchor_layout: None,
             },
         );
         marks.set(
@@ -426,6 +434,7 @@ mod tests {
                 snippet: None,
                 node_offset: None,
                 chapter_title: None,
+                anchor_layout: None,
             },
         );
         marks.set(
@@ -437,6 +446,7 @@ mod tests {
                 snippet: None,
                 node_offset: None,
                 chapter_title: None,
+                anchor_layout: None,
             },
         );
 
