@@ -207,6 +207,7 @@ fn epub_normal_specifics(keymap: &mut Keymap) {
     // `dd` deletes the comment or highlight under the cursor (or covered by
     // the visual selection). Mirrors the EpubContent binding.
     bind!(ctx, "dd" => Action::DeleteComment);
+    bind!(ctx, "K" => Action::PeekAnnotation);
 }
 
 fn pdf_specifics(keymap: &mut Keymap) {
@@ -602,6 +603,23 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::Global, "<Space>b"),
             LookupResult::Found(Action::ToggleZenBorder)
+        );
+    }
+
+    #[test]
+    fn annotation_peek_bound() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::EpubNormal, "K"),
+            LookupResult::Found(Action::PeekAnnotation)
+        );
+        assert_eq!(
+            lookup(&keymap, KeyContext::Global, "<Space>k"),
+            LookupResult::Found(Action::PeekAnnotation)
+        );
+        assert_eq!(
+            lookup(&keymap, KeyContext::Global, "<Space>i"),
+            LookupResult::Found(Action::ToggleInlineAnnotations)
         );
     }
 

@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/0ebe61c6-4629-4bde-8bd4-50feb9a424a3
 - Split layout: library/TOC on the left, reader on the right
 - Fast PDF/DJVU pipeline with Kitty SHM image transfer in supported terminals
 - Search, bookmarks, jump list history, reading stats
-- Inline comments/annotations with persistent storage and Markdown export
+- Inline comments/annotations with persistent storage and Markdown export; note bodies can be hidden and peeked on demand
 - Image rendering, link handling, and external viewer handoff
 - Theme selection, adjustable margins, zen mode
 - Vim-style keybindings and normal mode
@@ -139,13 +139,6 @@ bookokrat --synctex-forward LINE:COLUMN:FILE path/to/document.pdf
 ```
 
 The `synctex_editor` setting can also be configured in the Settings popup (`Space+s`), under the Integrations tab.
-
-For EPUB reading, `show_inline_annotations: false` in `config.yaml` hides inline
-comment bodies while retaining their text markings. The default is `true`.
-`Space+i` toggles visibility for the current session without changing the config.
-In normal mode, `Space+k` peeks at the annotation under the cursor; moving out of
-its range or pressing `Esc` closes it. Mouse selections also support peeking.
-`Space+a` continues to open the full Comments Viewer.
 
 ## Documentation
 

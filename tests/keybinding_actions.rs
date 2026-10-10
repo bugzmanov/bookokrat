@@ -180,10 +180,10 @@ binding_tests! {
         check = |app| matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::CommentsViewer));
     global_space_i: KeyContext::Global, "<Space>i",
         setup = |app, _dir| { open_book(&mut app); },
-        check = |app| !app.text_reader().show_inline_annotations() && app.settings_snapshot().show_inline_annotations;
+        check = |app| !app.text_reader().show_inline_annotations() && !app.settings_snapshot().show_inline_annotations;
     global_space_k: KeyContext::Global, "<Space>k",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
-        check = |app| app.has_notification() && !app.text_reader().is_annotation_peek_open();
+        check = |app| app.text_reader().testing_hud_message() == Some("No annotation under the cursor") && !app.text_reader().is_annotation_peek_open();
     // <Space>s opens settings popup (with pdf feature, which is default)
     global_space_s: KeyContext::Global, "<Space>s",
         setup = |app, _dir| { open_book(&mut app); },
@@ -618,6 +618,9 @@ binding_tests! {
     epub_normal_dd: KeyContext::EpubNormal, "dd",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
         check = |app| !app.text_reader().is_comment_input_active();
+    epub_normal_k_upper: KeyContext::EpubNormal, "K",
+        setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
+        check = |app| app.is_normal_mode() && app.text_reader().testing_hud_message() == Some("No annotation under the cursor");
     epub_normal_n: KeyContext::EpubNormal, "n",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
         check = |app| !app.is_normal_mode(); // toggles OFF

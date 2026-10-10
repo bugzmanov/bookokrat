@@ -25,6 +25,7 @@ pub enum SettingsAction {
     ZenBorderChanged,
     RenderModeChanged,
     EpubImageSizeChanged,
+    InlineAnnotationsChanged,
     TestLookupCommand,
     TestSynctexEditor,
 }
@@ -122,9 +123,11 @@ enum GeneralOption {
     ZenBorderHidden,
     EpubImagesAdaptive,
     EpubImagesCompact,
+    AnnotationsInline,
+    AnnotationsHidden,
 }
 
-const GENERAL_OPTIONS: [GeneralOption; 14] = [
+const GENERAL_OPTIONS: [GeneralOption; 16] = [
     GeneralOption::PdfEnabled,
     GeneralOption::PdfDisabled,
     GeneralOption::PdfRenderPage,
@@ -139,6 +142,8 @@ const GENERAL_OPTIONS: [GeneralOption; 14] = [
     GeneralOption::ZenBorderHidden,
     GeneralOption::EpubImagesAdaptive,
     GeneralOption::EpubImagesCompact,
+    GeneralOption::AnnotationsInline,
+    GeneralOption::AnnotationsHidden,
 ];
 
 impl GeneralOption {
@@ -158,6 +163,8 @@ impl GeneralOption {
             Self::ZenBorderHidden => 11,
             Self::EpubImagesAdaptive => 12,
             Self::EpubImagesCompact => 13,
+            Self::AnnotationsInline => 14,
+            Self::AnnotationsHidden => 15,
         }
     }
 
@@ -765,6 +772,7 @@ impl SettingsPopup {
         let current_column_mode = snapshot.epub_column_mode;
         let zen_hide_border = snapshot.zen_hide_border;
         let current_image_size = snapshot.epub_image_size;
+        let show_inline_annotations = snapshot.show_inline_annotations;
 
         vec![
             SettingsSection {
@@ -855,6 +863,29 @@ impl SettingsPopup {
                         label: "Compact",
                         hint: Some("fixed small size"),
                         selected: current_image_size == EpubImageSize::Compact,
+                        enabled: true,
+                    },
+                ],
+            },
+            SettingsSection {
+                title: "EPUB Annotations",
+                title_indent: 0,
+                options_indent: 2,
+                options_top_spacing: 0,
+                enabled: true,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::AnnotationsInline,
+                        label: "Inline",
+                        hint: Some("notes below the text"),
+                        selected: show_inline_annotations,
+                        enabled: true,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::AnnotationsHidden,
+                        label: "Hidden",
+                        hint: Some("underline only, K peeks"),
+                        selected: !show_inline_annotations,
                         enabled: true,
                     },
                 ],
@@ -1318,7 +1349,9 @@ impl SettingsPopup {
             | GeneralOption::ZenBorderShown
             | GeneralOption::ZenBorderHidden
             | GeneralOption::EpubImagesAdaptive
-            | GeneralOption::EpubImagesCompact => true,
+            | GeneralOption::EpubImagesCompact
+            | GeneralOption::AnnotationsInline
+            | GeneralOption::AnnotationsHidden => true,
         }
     }
 
@@ -1457,6 +1490,22 @@ impl SettingsPopup {
                     self.settings
                         .update(|settings| settings.epub_image_size = EpubImageSize::Compact);
                     return Some(SettingsAction::EpubImageSizeChanged);
+                }
+                None
+            }
+            GeneralOption::AnnotationsInline => {
+                if !snapshot.show_inline_annotations {
+                    self.settings
+                        .update(|settings| settings.show_inline_annotations = true);
+                    return Some(SettingsAction::InlineAnnotationsChanged);
+                }
+                None
+            }
+            GeneralOption::AnnotationsHidden => {
+                if snapshot.show_inline_annotations {
+                    self.settings
+                        .update(|settings| settings.show_inline_annotations = false);
+                    return Some(SettingsAction::InlineAnnotationsChanged);
                 }
                 None
             }

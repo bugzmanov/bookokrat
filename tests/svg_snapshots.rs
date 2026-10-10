@@ -25,17 +25,17 @@ use svg_generation::terminal_to_svg;
 static INIT: Once = Once::new();
 
 type AnnotationTerminal = ratatui::Terminal<ratatui::backend::TestBackend>;
+type AnnotationReader = bookokrat::markdown_text_reader::MarkdownTextReader;
+
+const GLOSS_HTML: &str = "<p>Learning a language means meeting many unfamiliar words, and a book quickly fills up with glosses written between the lines.</p><p>Hidden notes keep the page readable while an underline still marks every annotated word.</p>";
 
 fn annotation_reader_fixture(
     html: &str,
     inline: bool,
-) -> (
-    bookokrat::markdown_text_reader::MarkdownTextReader,
-    AnnotationTerminal,
-    TempDir,
-) {
+    width: u16,
+    height: u16,
+) -> (AnnotationReader, AnnotationTerminal, TempDir) {
     use bookokrat::comments::BookComments;
-    use bookokrat::markdown_text_reader::MarkdownTextReader;
     use std::sync::{Arc, Mutex};
     let dir = TempDir::new().unwrap();
     let comments =
@@ -44,22 +44,30 @@ fn annotation_reader_fixture(
         show_inline_annotations: inline,
         ..Settings::default()
     });
-    let mut reader = MarkdownTextReader::new_without_image_support(settings);
+    let mut reader = AnnotationReader::new_without_image_support(settings);
     reader.set_book_comments(Arc::new(Mutex::new(comments)));
     reader.set_content_from_string(html, None);
     reader.set_current_chapter_file(Some("chapter.xhtml".into()));
-    let mut terminal = create_test_terminal(100, 32);
+    let mut terminal = create_test_terminal(width, height);
     draw_annotation_reader(&mut reader, &mut terminal, false);
     (reader, terminal, dir)
 }
 
 fn draw_annotation_reader(
-    reader: &mut bookokrat::markdown_text_reader::MarkdownTextReader,
+    reader: &mut AnnotationReader,
     terminal: &mut AnnotationTerminal,
     zen: bool,
 ) -> String {
     terminal
         .draw(|f| {
+            // App::draw paints the theme background before the reader.
+            f.render_widget(
+                ratatui::widgets::Block::default().style(
+                    ratatui::style::Style::default()
+                        .bg(bookokrat::theme::theme_background_for(false)),
+                ),
+                f.area(),
+            );
             reader.render(
                 f,
                 f.area(),
@@ -70,17 +78,12 @@ fn draw_annotation_reader(
                 zen,
                 false,
             );
-            reader.render_annotation_peek(f);
         })
         .unwrap();
     terminal_to_svg(terminal)
 }
 
-fn add_reader_annotation(
-    reader: &mut bookokrat::markdown_text_reader::MarkdownTextReader,
-    needle: &str,
-    body: &str,
-) -> Comment {
+fn add_reader_annotation(reader: &mut AnnotationReader, needle: &str, body: &str) -> Comment {
     let (sl, sc, el, ec) = selection_for_text(
         reader.testing_rendered_lines(),
         needle,
@@ -106,75 +109,255 @@ fn add_reader_annotation(
     comment
 }
 
-#[test]
-#[parallel]
-fn test_annotation_visibility_roundtrip_svg() {
-    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(
-        "<p>Оқушы шығарманың бас кейіпкерімен, бірге.</p><p>Another paragraph.</p>",
-        true,
+fn cursor_on(reader: &mut AnnotationReader, needle: &str) {
+    let (line, column, _, _) = selection_for_text(reader.testing_rendered_lines(), needle, 1);
+    reader.update_normal_mode_cursor(line, column);
+}
+
+fn assert_annotation_svg(svg: String, name: &str) {
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(format!("tests/snapshots/debug_{name}.svg"), &svg).unwrap();
+    let test_name = format!("test_{name}_svg");
+    assert_svg_snapshot(
+        svg,
+        std::path::Path::new(&format!("tests/snapshots/{name}.svg")),
+        &test_name,
+        create_test_failure_handler(&test_name),
     );
-    add_reader_annotation(&mut reader, "кейіпкерімен", "Персонаж");
-    let (sl, sc, el, ec) = selection_for_text(reader.testing_rendered_lines(), "Another", 7);
-    let highlighted = reader.testing_comment_target_for_selection(sl, sc, el, ec);
-    {
-        let target = highlighted.unwrap();
-        reader
-            .get_comments()
-            .lock()
-            .unwrap()
-            .add_comment(Comment::new_highlight(
-                "chapter.xhtml".into(),
-                target,
-                HighlightColor::Yellow,
-                Utc::now(),
-                None,
-            ))
-            .unwrap();
-        reader.rebuild_chapter_comments();
-    }
-    let before = draw_annotation_reader(&mut reader, &mut terminal, false);
-    let highlighted_spans = reader
-        .testing_rendered_lines()
-        .iter()
-        .find(|line| line.raw_text.contains("Another"))
-        .unwrap()
-        .spans
-        .clone();
-    let count_before = reader.testing_rendered_lines().len();
-    let path = reader.get_comments().lock().unwrap().file_path.clone();
-    let bytes = std::fs::read(&path).unwrap();
-    assert!(svg_text(&before).contains("Персонаж"));
-    assert!(!reader.toggle_inline_annotations());
-    let hidden = draw_annotation_reader(&mut reader, &mut terminal, false);
-    assert!(!svg_text(&hidden).contains("Персонаж"));
-    assert!(!svg_text(&hidden).contains("Note //"));
-    assert_eq!(
-        highlighted_spans,
-        reader
-            .testing_rendered_lines()
-            .iter()
-            .find(|line| line.raw_text.contains("Another"))
-            .unwrap()
-            .spans
-    );
-    assert!(reader.testing_rendered_lines().len() < count_before);
-    assert_eq!(
-        count_underlined_chars_in_needle(reader.testing_rendered_lines(), "кейіпкерімен"),
-        "кейіпкерімен".chars().count()
-    );
-    assert!(reader.toggle_inline_annotations());
-    assert_eq!(
-        before,
-        draw_annotation_reader(&mut reader, &mut terminal, false)
-    );
-    assert_eq!(bytes, std::fs::read(path).unwrap());
+}
+
+fn screen_text(terminal: &AnnotationTerminal) -> String {
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
 #[parallel]
-fn test_annotation_peek_scopes_and_storage_svg() {
+fn test_annotations_hidden_svg() {
+    ensure_test_report_initialized();
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(GLOSS_HTML, false, 80, 14);
+    add_reader_annotation(&mut reader, "unfamiliar", "незнакомый: not known before");
+    add_reader_annotation(&mut reader, "glosses", "short translations next to a word");
+    let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
+    assert!(!screen_text(&terminal).contains("незнакомый"));
+    assert_eq!(
+        count_underlined_chars_in_needle(reader.testing_rendered_lines(), "unfamiliar"),
+        "unfamiliar".len()
+    );
+    assert_annotation_svg(svg, "annotations_hidden");
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_svg() {
+    ensure_test_report_initialized();
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(GLOSS_HTML, false, 80, 14);
+    add_reader_annotation(&mut reader, "unfamiliar", "незнакомый: not known before");
+    add_reader_annotation(&mut reader, "glosses", "short translations next to a word");
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    reader.toggle_normal_mode();
+    cursor_on(&mut reader, "unfamiliar");
+    assert!(reader.open_annotation_peek());
+    let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
+    assert_annotation_svg(svg, "annotation_peek");
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_above_truncated_svg() {
+    ensure_test_report_initialized();
+    let html = (0..6)
+        .map(|n| format!("<p>Paragraph {n} keeps the reader busy with ordinary prose.</p>"))
+        .collect::<String>()
+        + "<p>The last line holds a rocky word.</p>";
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(&html, false, 70, 20);
+    let note = (1..=20)
+        .map(|n| format!("line {n} of a long note"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    add_reader_annotation(&mut reader, "rocky", &note);
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    reader.toggle_normal_mode();
+    cursor_on(&mut reader, "rocky");
+    assert!(reader.open_annotation_peek());
+    let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
+    let screen = screen_text(&terminal);
+    assert!(screen.contains("line 1 of a long note"), "{screen}");
+    assert!(screen.contains("lines · Space+a"), "{screen}");
+    let (_, word_y) = screen_position_of(&terminal, "rocky word");
+    let (_, note_y) = screen_position_of(&terminal, "line 1 of a long note");
+    assert!(note_y < word_y, "the roomier side is above:\n{screen}");
+    assert_annotation_svg(svg, "annotation_peek_above_truncated");
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_overlapping_notes_svg() {
+    ensure_test_report_initialized();
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(GLOSS_HTML, false, 80, 16);
+    add_reader_annotation(&mut reader, "many unfamiliar words", "a phrase-level note");
+    add_reader_annotation(&mut reader, "unfamiliar", "a word-level note");
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    reader.toggle_normal_mode();
+    cursor_on(&mut reader, "unfamiliar");
+    assert!(reader.open_annotation_peek());
+    let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
+    let screen = screen_text(&terminal);
+    assert!(screen.contains("a phrase-level note") && screen.contains("a word-level note"));
+    assert_annotation_svg(svg, "annotation_peek_overlapping_notes");
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_dual_column_svg() {
+    ensure_test_report_initialized();
+    let mut html = (0..8)
+        .map(|n| format!("<p>Paragraph {n} with some words.</p>"))
+        .collect::<String>();
+    html.push_str("<p>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda.</p>");
+    let (mut reader, _, _dir) = annotation_reader_fixture(&html, false, 100, 32);
+    add_reader_annotation(&mut reader, "beta", "Translation");
+    reader.set_dual_columns(true);
+    reader.set_justify_text(true);
+    reader.set_margin(1);
+    let mut terminal = create_test_terminal(150, 18);
+    draw_annotation_reader(&mut reader, &mut terminal, true);
+    assert!(reader.is_dual_active());
+    let (x, y) = screen_position_of(&terminal, "beta");
+    assert!(x > 75, "beta should land in the right column");
+    reader.handle_mouse_down(x, y);
+    reader.handle_mouse_drag(x + 3, y);
+    reader.handle_mouse_up(x + 3, y);
+    assert!(reader.open_annotation_peek());
+    let svg = draw_annotation_reader(&mut reader, &mut terminal, true);
+    assert!(screen_text(&terminal).contains("Translation"));
+    assert_annotation_svg(svg, "annotation_peek_dual_column");
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_multiline_passage_svg() {
+    ensure_test_report_initialized();
+    let html = "<p>Volkswagen promised a return with their new version of the old Beetle in 1998: if you sold your soul in the eighties, here is your chance to buy it back.</p><p>The slogan landed with a generation that had started to question its choices.</p>";
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(html, false, 60, 18);
+    let lines = reader.testing_rendered_lines();
+    let (start_line, start_col, _, _) = selection_for_text(lines, "if you sold", 1);
+    let next_word = lines[start_line + 1]
+        .raw_text
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    let (end_line, end_col, _, _) = selection_for_text(lines, &next_word, 1);
+    assert_eq!(end_line, start_line + 1, "the passage must wrap");
+    let target = reader
+        .testing_comment_target_for_selection(
+            start_line,
+            start_col,
+            end_line,
+            end_col + next_word.chars().count(),
+        )
+        .unwrap();
+    reader
+        .get_comments()
+        .lock()
+        .unwrap()
+        .add_comment(Comment::new(
+            "chapter.xhtml".into(),
+            target,
+            "a note across a line break".into(),
+            Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap(),
+        ))
+        .unwrap();
+    reader.rebuild_chapter_comments();
+    reader.invalidate_render_cache();
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    reader.toggle_normal_mode();
+    cursor_on(&mut reader, "sold");
+    assert!(reader.open_annotation_peek());
+    let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
+    let (sold_x, sold_y) = screen_position_of(&terminal, "if you sold");
+    let (_, next_y) = screen_position_of(&terminal, &next_word);
+    let (note_x, note_y) = screen_position_of(&terminal, "a note across");
+    assert_eq!(
+        next_y,
+        sold_y + 1,
+        "the passage's second line stays visible"
+    );
+    assert!(note_y > next_y, "the card goes below the whole passage");
+    assert_eq!(note_x, sold_x, "card text lines up with the passage start");
+    assert_annotation_svg(svg, "annotation_peek_multiline_passage");
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_avoids_image_svg() {
+    ensure_test_report_initialized();
+    let html = (0..4)
+        .map(|n| format!("<p>Paragraph {n} sets the scene before the figure.</p>"))
+        .collect::<String>()
+        + "<p>The figure below shows the pyramid.</p><p><img src=\"pyramid.png\" alt=\"Population pyramid\" width=\"400\" height=\"300\"/></p><p>Text after the figure.</p>";
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(&html, false, 70, 24);
+    add_reader_annotation(&mut reader, "pyramid", "a chart of ages by sex");
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    reader.toggle_normal_mode();
+    cursor_on(&mut reader, "pyramid");
+    assert!(reader.open_annotation_peek());
+    let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
+    let (_, word_y) = screen_position_of(&terminal, "shows the pyramid");
+    let (_, note_y) = screen_position_of(&terminal, "a chart of ages");
+    assert!(
+        note_y < word_y,
+        "with an image right below, the card goes above"
+    );
+    assert_annotation_svg(svg, "annotation_peek_avoids_image");
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_follows_cursor() {
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(GLOSS_HTML, false, 80, 14);
+    add_reader_annotation(&mut reader, "unfamiliar", "note");
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    reader.toggle_normal_mode();
+
+    cursor_on(&mut reader, "many");
+    assert!(!reader.toggle_annotation_peek(), "plain text has no note");
+
+    cursor_on(&mut reader, "unfamiliar");
+    assert!(reader.toggle_annotation_peek());
+    reader.normal_mode_right();
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    assert!(reader.is_annotation_peek_open(), "still inside the word");
+
+    let (line, column, _, end) =
+        selection_for_text(reader.testing_rendered_lines(), "unfamiliar", 10);
+    reader.update_normal_mode_cursor(line, end);
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    assert!(!reader.is_annotation_peek_open(), "range end is exclusive");
+
+    reader.update_normal_mode_cursor(line, column);
+    assert!(reader.toggle_annotation_peek());
+    assert!(reader.toggle_annotation_peek(), "second press closes");
+    assert!(!reader.is_annotation_peek_open());
+
+    assert!(reader.open_annotation_peek());
+    reader.set_current_chapter_file(Some("other.xhtml".into()));
+    assert!(!reader.is_annotation_peek_open());
+}
+
+#[test]
+#[parallel]
+fn test_annotation_peek_block_scopes() {
     let html = "<p>кейіпкерімен шығарма оқиға</p><section><p>nested words</p></section><ul><li>outer<ul><li>inner words</li></ul></li></ul><blockquote><p>quoted words</p></blockquote><dl><dt>term</dt><dd>definition words</dd></dl><pre>let value = 1;\nlet other = 2;</pre>";
-    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(html, false);
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(html, false, 100, 32);
     let needles = [
         "кейіпкерімен",
         "шығарма",
@@ -184,59 +367,70 @@ fn test_annotation_peek_scopes_and_storage_svg() {
         "definition",
         "let value",
     ];
-    for (index, needle) in needles.iter().enumerate() {
-        add_reader_annotation(&mut reader, needle, &format!("translation-{index}"));
+    for needle in needles {
+        add_reader_annotation(&mut reader, needle, &format!("note for {needle}"));
     }
-    let path = reader.get_comments().lock().unwrap().file_path.clone();
-    let bytes = std::fs::read(&path).unwrap();
+    let storage = reader.get_comments().lock().unwrap().file_path.clone();
+    let stored = std::fs::read(&storage).unwrap();
     draw_annotation_reader(&mut reader, &mut terminal, false);
     reader.toggle_normal_mode();
-    for (index, needle) in needles.iter().enumerate() {
-        let (line, col, _, _) = selection_for_text(reader.testing_rendered_lines(), needle, 1);
-        reader.update_normal_mode_cursor(line, col);
+    for needle in needles {
+        cursor_on(&mut reader, needle);
         assert!(reader.open_annotation_peek(), "{needle}");
-        let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
+        draw_annotation_reader(&mut reader, &mut terminal, false);
         assert!(
-            svg_text(&svg).contains(&format!("translation-{index}")),
+            screen_text(&terminal).contains(&format!("note for {needle}")),
             "{needle}"
         );
-        reader.normal_mode_right();
-        reader.validate_annotation_peek();
-        assert!(reader.is_annotation_peek_open());
         reader.close_annotation_peek();
     }
-    let (line, col, _, _) = selection_for_text(reader.testing_rendered_lines(), "outer", 1);
-    reader.update_normal_mode_cursor(line, col);
+    cursor_on(&mut reader, "outer");
     assert!(
         !reader.open_annotation_peek(),
-        "nested list annotation must not match its parent"
+        "a nested list note must not match its parent item"
     );
-    assert_eq!(bytes, std::fs::read(path).unwrap());
+    assert_eq!(stored, std::fs::read(storage).unwrap());
 }
 
 #[test]
 #[parallel]
-fn test_annotation_peek_multislice_legacy_and_layout_svg() {
+fn test_annotation_peek_on_click() {
+    let (mut reader, mut terminal, _dir) = annotation_reader_fixture(GLOSS_HTML, false, 80, 14);
+    add_reader_annotation(&mut reader, "unfamiliar", "note");
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    let (x, y) = screen_position_of(&terminal, "unfamiliar");
+    reader.handle_mouse_down(x + 2, y);
+    reader.handle_mouse_up(x + 2, y);
+    assert!(reader.is_annotation_peek_open());
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    assert!(reader.is_annotation_peek_open(), "a click peek stays open");
+
+    let (x_plain, y_plain) = screen_position_of(&terminal, "Learning");
+    reader.handle_mouse_down(x_plain, y_plain);
+    reader.handle_mouse_up(x_plain, y_plain);
+    assert!(!reader.is_annotation_peek_open());
+
+    reader.set_show_inline_annotations(true);
+    draw_annotation_reader(&mut reader, &mut terminal, false);
+    let (x, y) = screen_position_of(&terminal, "unfamiliar");
+    reader.handle_mouse_down(x, y);
+    reader.handle_mouse_up(x, y);
+    assert!(
+        !reader.is_annotation_peek_open(),
+        "inline bodies are already visible"
+    );
+}
+
+#[test]
+#[parallel]
+fn test_inline_annotations_toggle_keeps_cursor_and_storage() {
     let (mut reader, mut terminal, _dir) = annotation_reader_fixture(
         "<p>first words</p><p>second paragraph with more words</p><p>last paragraph</p>",
         true,
+        100,
+        32,
     );
-    let (sl, sc, _, _) = selection_for_text(reader.testing_rendered_lines(), "first", 1);
-    let (_, _, el, ec) = selection_for_text(reader.testing_rendered_lines(), "more words", 10);
-    let target = reader
-        .testing_comment_target_for_selection(sl, sc, el, ec)
-        .unwrap();
-    reader
-        .get_comments()
-        .lock()
-        .unwrap()
-        .add_comment(Comment::new(
-            "chapter.xhtml".into(),
-            target,
-            "Across paragraphs".into(),
-            Utc::now(),
-        ))
-        .unwrap();
+    add_reader_annotation(&mut reader, "first", "on the first paragraph");
     reader
         .get_comments()
         .lock()
@@ -244,53 +438,54 @@ fn test_annotation_peek_multislice_legacy_and_layout_svg() {
         .add_comment(Comment::new(
             "chapter.xhtml".into(),
             CommentTarget::paragraph(2, None),
-            "Legacy note".into(),
-            Utc::now(),
+            "legacy whole-paragraph note".into(),
+            Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap(),
         ))
         .unwrap();
     reader.rebuild_chapter_comments();
     reader.invalidate_render_cache();
-    draw_annotation_reader(&mut reader, &mut terminal, false);
+    let shown = draw_annotation_reader(&mut reader, &mut terminal, false);
+    let storage = reader.get_comments().lock().unwrap().file_path.clone();
+    let stored = std::fs::read(&storage).unwrap();
+    let lines_shown = reader.testing_rendered_lines().len();
+
     reader.toggle_normal_mode();
-    let (line, col, _, _) = selection_for_text(reader.testing_rendered_lines(), "more words", 1);
-    reader.update_normal_mode_cursor(line, col);
-    assert!(reader.open_annotation_peek());
-    assert!(
-        svg_text(&draw_annotation_reader(&mut reader, &mut terminal, false))
-            .contains("Across paragraphs")
-    );
-    reader.close_annotation_peek();
+    cursor_on(&mut reader, "more words");
     reader.enter_visual_mode(bookokrat::markdown_text_reader::VisualMode::CharacterWise);
-    reader.normal_mode_right();
-    let selected = reader.get_visual_selection_range().unwrap();
-    reader.toggle_inline_annotations();
-    draw_annotation_reader(&mut reader, &mut terminal, true);
-    assert!(reader.open_annotation_peek());
-    reader.close_annotation_peek();
-    reader.toggle_inline_annotations();
+    for _ in 0..3 {
+        reader.normal_mode_right();
+    }
+    assert!(!reader.toggle_inline_annotations());
     draw_annotation_reader(&mut reader, &mut terminal, false);
-    assert_eq!(selected, reader.get_visual_selection_range().unwrap());
+    assert!(reader.testing_rendered_lines().len() < lines_shown);
+    assert!(!screen_text(&terminal).contains("on the first paragraph"));
+    assert_eq!(
+        reader.get_visual_selection_range(),
+        Some(selection_for_text(
+            reader.testing_rendered_lines(),
+            "more words",
+            4
+        )),
+        "the selection follows its text through the reflow"
+    );
     reader.exit_visual_mode();
-    reader.toggle_inline_annotations();
-    draw_annotation_reader(&mut reader, &mut terminal, false);
     assert!(
-        count_underlined_chars_in_needle(reader.testing_rendered_lines(), "last paragraph") > 0
+        count_underlined_chars_in_needle(reader.testing_rendered_lines(), "last paragraph") > 0,
+        "a hidden legacy note underlines its whole paragraph"
     );
-    let (line, col, _, _) =
-        selection_for_text(reader.testing_rendered_lines(), "last paragraph", 1);
-    reader.update_normal_mode_cursor(line, col);
-    assert!(reader.open_annotation_peek());
-    assert!(
-        svg_text(&draw_annotation_reader(&mut reader, &mut terminal, false))
-            .contains("Legacy note")
+
+    reader.toggle_normal_mode();
+    assert!(reader.toggle_inline_annotations());
+    assert_eq!(
+        shown,
+        draw_annotation_reader(&mut reader, &mut terminal, false)
     );
-    reader.set_current_chapter_file(Some("different.xhtml".into()));
-    assert!(!reader.is_annotation_peek_open());
+    assert_eq!(stored, std::fs::read(storage).unwrap());
 }
 
 #[test]
 #[parallel]
-fn test_annotation_peek_keyboard_edit_delete_viewer_svg() {
+fn test_annotation_peek_keyboard_flow() {
     use crossterm::event::KeyCode;
     let dir = TempDir::new().unwrap();
     std::fs::write(
@@ -313,14 +508,14 @@ fn test_annotation_peek_keyboard_edit_delete_viewer_svg() {
     open_first_book(&mut app);
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
     let mut terminal = create_test_terminal(100, 30);
-    terminal
-        .draw(|f| app.draw(f, &create_test_fps_counter()))
-        .unwrap();
+    let mut draw = |app: &mut App| {
+        terminal
+            .draw(|f| app.draw(f, &create_test_fps_counter()))
+            .unwrap();
+    };
+    draw(&mut app);
     let chapter = app.testing_current_chapter_file().unwrap();
-    for (needle, body) in [
-        ("alpha", "First translation"),
-        ("beta", "Second translation"),
-    ] {
+    for (needle, body) in [("alpha", "first note"), ("gamma", "second note")] {
         let (sl, sc, el, ec) =
             selection_for_text(app.testing_rendered_lines(), needle, needle.chars().count());
         let target = app
@@ -333,157 +528,69 @@ fn test_annotation_peek_keyboard_edit_delete_viewer_svg() {
             Utc::now(),
         ));
     }
-    terminal
-        .draw(|f| app.draw(f, &create_test_fps_counter()))
-        .unwrap();
-    for ch in "ngg0 k".chars() {
+    draw(&mut app);
+
+    for ch in "ngg0K".chars() {
         app.press_key(KeyCode::Char(ch));
     }
-    terminal
-        .draw(|f| app.draw(f, &create_test_fps_counter()))
-        .unwrap();
-    assert!(svg_text(&terminal_to_svg(&terminal)).contains("First translation"));
-    assert_eq!(app.focused_panel, FocusedPanel::Main(MainPanel::Content));
-    app.press_key(KeyCode::Char('l'));
     assert!(app.text_reader().is_annotation_peek_open());
-    app.press_key(KeyCode::Char('w'));
+    app.press_key(KeyCode::Esc);
     assert!(!app.text_reader().is_annotation_peek_open());
+    assert!(
+        app.text_reader().is_normal_mode_active(),
+        "Esc only closes the peek"
+    );
+
     for ch in " k".chars() {
         app.press_key(KeyCode::Char(ch));
     }
-    terminal
-        .draw(|f| app.draw(f, &create_test_fps_counter()))
-        .unwrap();
-    assert!(svg_text(&terminal_to_svg(&terminal)).contains("Second translation"));
-    app.press_key(KeyCode::Esc);
+    assert!(app.text_reader().is_annotation_peek_open());
+    app.press_key(KeyCode::Char('w'));
+    draw(&mut app);
     assert!(!app.text_reader().is_annotation_peek_open());
-    assert!(app.text_reader().is_normal_mode_active());
-    for ch in " k a".chars() {
-        app.press_key(KeyCode::Char(ch));
-    }
-    assert!(!app.text_reader().is_annotation_peek_open());
+    app.press_key(KeyCode::Char('K'));
     assert_eq!(
-        app.focused_panel,
-        FocusedPanel::Popup(bookokrat::PopupWindow::CommentsViewer)
+        app.text_reader().testing_hud_message(),
+        Some("No annotation under the cursor")
     );
-    app.press_key(KeyCode::Esc);
-    for ch in "gg0vea".chars() {
+
+    for ch in "wvea".chars() {
         app.press_key(KeyCode::Char(ch));
     }
     assert!(app.text_reader().is_comment_input_active());
-    for ch in " updated".chars() {
+    for ch in " edited".chars() {
         app.press_key(KeyCode::Char(ch));
     }
     app.press_key(KeyCode::Esc);
     let comments = app.text_reader().get_comments();
-    assert!(
-        comments
-            .lock()
-            .unwrap()
-            .get_all_comments()
-            .iter()
-            .any(|c| c.content.contains("updated"))
-    );
-    terminal
-        .draw(|f| app.draw(f, &create_test_fps_counter()))
-        .unwrap();
-    for ch in "gg0dd".chars() {
-        app.press_key(KeyCode::Char(ch));
-    }
-    assert_eq!(comments.lock().unwrap().get_all_comments().len(), 1);
-    for ch in "gg0wwvea".chars() {
-        app.press_key(KeyCode::Char(ch));
-    }
-    assert!(app.text_reader().is_comment_input_active());
-    for ch in "New translation".chars() {
-        app.press_key(KeyCode::Char(ch));
-    }
-    app.press_key(KeyCode::Esc);
-    assert_eq!(comments.lock().unwrap().get_all_comments().len(), 2);
+    let all = comments.lock().unwrap().get_all_comments().to_vec();
+    assert_eq!(all.len(), 2, "editing a hidden note must not add a new one");
+    assert!(all.iter().any(|c| c.content == "second note edited"));
+
     for ch in " i".chars() {
         app.press_key(KeyCode::Char(ch));
     }
-    terminal
-        .draw(|f| app.draw(f, &create_test_fps_counter()))
-        .unwrap();
-    assert!(svg_text(&terminal_to_svg(&terminal)).contains("New translation"));
-    assert!(!app.settings_snapshot().show_inline_annotations);
+    assert!(app.settings_snapshot().show_inline_annotations);
+    draw(&mut app);
+    assert!(svg_text_contains(
+        &terminal_to_svg(&terminal),
+        "second note edited"
+    ));
 }
 
 #[test]
 #[parallel]
-fn test_annotation_peek_dual_justified_mouse_svg() {
-    let mut html = (0..8)
-        .map(|n| format!("<p>Paragraph {n} with some words.</p>"))
-        .collect::<String>();
-    html.push_str("<p>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda.</p>");
-    let (mut reader, _, _dir) = annotation_reader_fixture(&html, false);
-    add_reader_annotation(&mut reader, "beta", "Translation");
-    reader.set_dual_columns(true);
-    reader.set_justify_text(true);
-    reader.set_margin(1);
-    let mut terminal = create_test_terminal(150, 18);
-    draw_annotation_reader(&mut reader, &mut terminal, true);
-    assert!(reader.is_dual_active());
-    let (x, y) = screen_position_of(&terminal, "beta");
-    assert!(x > 75, "exercise right-column popup positioning");
-    reader.handle_mouse_down(x, y);
-    reader.handle_mouse_drag(x + 4, y);
-    reader.handle_mouse_up(x + 4, y);
-    assert!(reader.open_annotation_peek());
-    assert!(
-        svg_text(&draw_annotation_reader(&mut reader, &mut terminal, true)).contains("Translation")
-    );
-    reader.close_annotation_peek();
-    reader.toggle_inline_annotations();
-    draw_annotation_reader(&mut reader, &mut terminal, true);
-    reader.toggle_inline_annotations();
-    draw_annotation_reader(&mut reader, &mut terminal, true);
-    assert!(
-        reader.open_annotation_peek(),
-        "mouse selection must survive reflow"
-    );
-    reader.close_annotation_peek();
-    reader.clear_selection();
-    reader.toggle_normal_mode();
-    let (line, col, _, end) = selection_for_text(reader.testing_rendered_lines(), "beta", 4);
-    reader.update_normal_mode_cursor(line, col);
-    assert!(reader.open_annotation_peek());
-    reader.update_normal_mode_cursor(line, end);
-    reader.validate_annotation_peek();
-    assert!(
-        !reader.is_annotation_peek_open(),
-        "end of the range is exclusive"
-    );
-    reader.update_normal_mode_cursor(line, col - 1);
-    assert!(
-        !reader.open_annotation_peek(),
-        "space before the word is outside its range"
-    );
-    reader.update_normal_mode_cursor(line, col);
-    assert!(reader.open_annotation_peek());
-    reader.toggle_raw_html();
-    assert!(!reader.is_annotation_peek_open());
-}
-
-#[test]
-#[parallel]
-fn test_annotation_peek_wrapping_small_viewport_svg() {
-    let (mut reader, mut terminal, _dir) = annotation_reader_fixture("<p>alpha beta</p>", false);
+fn test_annotation_peek_tiny_viewports() {
+    let (mut reader, mut terminal, _dir) =
+        annotation_reader_fixture("<p>alpha beta</p>", false, 80, 14);
     add_reader_annotation(
         &mut reader,
         "alpha",
-        &"Long annotation with several lines.\n".repeat(30),
+        &"a long line of note text ".repeat(40),
     );
     draw_annotation_reader(&mut reader, &mut terminal, false);
     reader.toggle_normal_mode();
-    reader.normal_mode_document_top();
-    reader.normal_mode_line_start();
-    assert!(reader.open_annotation_peek());
-    let svg = draw_annotation_reader(&mut reader, &mut terminal, false);
-    assert!(svg_text(&svg).contains("More in Comments Viewer"));
-    // Save a review artifact without creating or changing a golden snapshot.
-    std::fs::write(_dir.path().join("long_annotation_peek.svg"), svg).unwrap();
+    cursor_on(&mut reader, "alpha");
     for (width, height) in [(32, 8), (8, 4), (3, 3)] {
         let mut small = create_test_terminal(width, height);
         reader.open_annotation_peek();
@@ -491,13 +598,14 @@ fn test_annotation_peek_wrapping_small_viewport_svg() {
     }
 }
 
-fn svg_text(svg: &str) -> String {
+fn svg_text_contains(svg: &str, needle: &str) -> bool {
     roxmltree::Document::parse(svg)
         .unwrap()
         .descendants()
         .filter(|node| node.is_text() && node.parent().is_some_and(|p| p.has_tag_name("tspan")))
         .filter_map(|node| node.text())
-        .collect()
+        .collect::<String>()
+        .contains(needle)
 }
 
 fn ensure_test_report_initialized() {

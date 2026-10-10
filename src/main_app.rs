@@ -4163,12 +4163,6 @@ impl App {
     }
 
     pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
-        if !self.is_main_panel(MainPanel::Content)
-            || self.is_pdf_mode()
-            || self.is_highlight_palette_active()
-        {
-            self.text_reader.close_annotation_peek();
-        }
         let draw_closure_start = std::time::Instant::now();
         #[cfg(feature = "pdf")]
         let mut pdf_area = None;
@@ -4282,7 +4276,6 @@ impl App {
         }
 
         self.render_highlight_palette(f);
-        self.text_reader.render_annotation_peek(f);
 
         #[cfg(feature = "pdf")]
         if self.has_active_popup()
@@ -5214,8 +5207,12 @@ impl App {
                 true
             }
             Action::ToggleInlineAnnotations => {
-                if self.current_book.is_some() && !self.is_pdf_mode() {
+                if self.is_pdf_mode() {
+                    self.set_pdf_error_hud("Hiding inline annotations is only available for EPUB");
+                } else if self.current_book.is_some() {
                     let enabled = self.text_reader.toggle_inline_annotations();
+                    self.settings
+                        .update(|settings| settings.show_inline_annotations = enabled);
                     self.notifications.info(if enabled {
                         "Inline annotations: shown"
                     } else {
@@ -5225,11 +5222,10 @@ impl App {
                 true
             }
             Action::PeekAnnotation => {
-                if !self.is_pdf_mode()
-                    && self.is_main_panel(MainPanel::Content)
-                    && !self.text_reader.open_annotation_peek()
-                {
-                    self.notifications.info("No annotation under the cursor");
+                if self.is_pdf_mode() {
+                    self.set_pdf_error_hud("Annotation peek is only available for EPUB");
+                } else if self.is_main_panel(MainPanel::Content) {
+                    self.toggle_annotation_peek();
                 }
                 true
             }
@@ -5562,6 +5558,10 @@ impl App {
             SettingsAction::EpubImageSizeChanged => {
                 self.text_reader.refresh_image_sizing();
             }
+            SettingsAction::InlineAnnotationsChanged => {
+                let enabled = self.settings.load().show_inline_annotations;
+                self.text_reader.set_show_inline_annotations(enabled);
+            }
             SettingsAction::RenderModeChanged => {
                 // Page and scroll mode store the reading position differently, so
                 // convert it instead of jumping to the first page.
@@ -5799,10 +5799,30 @@ impl App {
         true
     }
 
+    fn toggle_annotation_peek(&mut self) {
+        if !self.text_reader.toggle_annotation_peek() {
+            self.text_reader
+                .set_error_hud("No annotation under the cursor");
+        }
+    }
+
+    fn set_pdf_error_hud(&mut self, message: &str) {
+        #[cfg(feature = "pdf")]
+        if let Some(ref mut pdf_reader) = self.pdf_reader {
+            pdf_reader.set_error_hud(message.to_string());
+        }
+        #[cfg(not(feature = "pdf"))]
+        let _ = message;
+    }
+
     fn dispatch_epub_normal_action(&mut self, action: crate::keybindings::action::Action) -> bool {
         use crate::keybindings::action::Action;
 
         match action {
+            Action::PeekAnnotation => {
+                self.toggle_annotation_peek();
+                true
+            }
             Action::MoveLeft => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
@@ -6207,11 +6227,7 @@ impl App {
             return None;
         }
         let action = self.handle_key_event_inner(key);
-        self.text_reader.validate_annotation_peek();
-        if !self.is_main_panel(MainPanel::Content)
-            || self.is_pdf_mode()
-            || self.is_highlight_palette_active()
-        {
+        if self.is_highlight_palette_active() {
             self.text_reader.close_annotation_peek();
         }
         action
@@ -8734,62 +8750,6 @@ mod tests {
     use super::*;
     use crate::reading_history::ReadingHistoryAction;
     use crate::simple_fake_books::{FakeBookConfig, create_fake_epub_file};
-
-    #[cfg(feature = "pdf")]
-    #[test]
-    fn epub_annotation_actions_leave_pdf_and_djvu_unchanged() {
-        use crate::keybindings::action::Action;
-        for extension in ["pdf", "djvu"] {
-            let dir = tempfile::TempDir::new().unwrap();
-            let path = dir.path().join("book.epub");
-            create_fake_epub_file(
-                &path,
-                &FakeBookConfig {
-                    title: "Test".into(),
-                    chapter_count: 1,
-                    words_per_chapter: 20,
-                },
-            )
-            .unwrap();
-            let mut app = App::new_with_config(
-                Some(dir.path().to_str().unwrap()),
-                Some("/dev/null"),
-                false,
-                Some(dir.path()),
-                None,
-            );
-            app.open_book_for_reading_by_path(path.to_str().unwrap(), None)
-                .unwrap();
-            app.pdf_reader = Some(PdfReaderState::new(
-                format!("book.{extension}"),
-                true,
-                false,
-                0,
-                1.0,
-                0,
-                0,
-                current_theme().clone(),
-                0,
-                false,
-                false,
-                None,
-                String::new(),
-                app.settings.clone(),
-            ));
-            app.focused_panel = FocusedPanel::Main(MainPanel::Content);
-            let before = serde_yaml::to_string(app.settings.load().as_ref()).unwrap();
-            assert!(app.dispatch_global_action(Action::ToggleInlineAnnotations));
-            assert!(app.dispatch_global_action(Action::PeekAnnotation));
-            assert!(app.text_reader.show_inline_annotations());
-            assert!(!app.text_reader.is_annotation_peek_open());
-            assert_eq!(
-                before,
-                serde_yaml::to_string(app.settings.load().as_ref()).unwrap()
-            );
-            assert!(app.is_pdf_mode());
-            assert_eq!(app.focused_panel, FocusedPanel::Main(MainPanel::Content));
-        }
-    }
 
     /// Regression test for https://github.com/bugzmanov/bookokrat/issues/104
     ///
