@@ -830,6 +830,84 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sniff_format_matches_extension_for_every_test_document() {
+        use std::io::Read;
+
+        // Only the tracked real documents; elsewhere under tests/ may be local placeholders.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testdata");
+        let mut checked = Vec::new();
+        for entry in WalkDir::new(&root).into_iter().filter_map(Result::ok) {
+            let path = entry.path().to_string_lossy().into_owned();
+            let Some(expected) = BookManager::detect_format(&path) else {
+                continue;
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let mut head = Vec::new();
+            fs::File::open(entry.path())
+                .unwrap()
+                .take(4096)
+                .read_to_end(&mut head)
+                .unwrap();
+            assert_eq!(BookManager::sniff_format(&head), Some(expected), "{path}");
+            checked.push(expected);
+        }
+        assert!(
+            checked.contains(&BookFormat::Epub),
+            "no EPUB fixtures found"
+        );
+        #[cfg(feature = "pdf")]
+        assert!(checked.contains(&BookFormat::Pdf), "no PDF fixtures found");
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn sniff_format_finds_pdf_marker_only_in_first_kilobyte() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..2000 {
+            // Lowercase filler can't form any other signature.
+            let mut head: Vec<u8> = (0..rng.gen_range(5..3000))
+                .map(|_| rng.gen_range(b'a'..=b'z'))
+                .collect();
+            let at = rng.gen_range(0..=head.len() - 5);
+            head[at..at + 5].copy_from_slice(b"%PDF-");
+            let expected = (at + 5 <= 1024).then_some(BookFormat::Pdf);
+            assert_eq!(
+                BookManager::sniff_format(&head),
+                expected,
+                "marker at {at} of {} bytes",
+                head.len()
+            );
+        }
+    }
+
+    #[test]
+    fn sniff_format_ignores_truncated_signatures() {
+        let signatures: [&[u8]; 5] = [
+            b"%PDF-",
+            b"PK\x03\x04",
+            b"AT&TFORM",
+            b"<!doctype html",
+            b"<html",
+        ];
+        for signature in signatures {
+            for len in 0..signature.len() {
+                let head = &signature[..len];
+                assert_eq!(
+                    BookManager::sniff_format(head),
+                    None,
+                    "{}",
+                    String::from_utf8_lossy(head)
+                );
+            }
+        }
+    }
+
     #[cfg(feature = "pdf")]
     #[test]
     fn get_books_filters_pdf_and_djvu_when_pdf_disabled() {

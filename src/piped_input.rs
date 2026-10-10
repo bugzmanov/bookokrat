@@ -152,9 +152,13 @@ fn evict_copies(dir: &Path, keep: &Path, now: SystemTime, max_unused: Duration, 
         .collect();
     others.sort_by(|a, b| b.0.cmp(&a.0));
 
+    // Once a copy doesn't fit, it and every older one go, even smaller ones
+    // that would: keeping those would evict out of recency order.
+    let mut over_limit = false;
     for (used, len, path) in others {
         let stale = now.duration_since(used).is_ok_and(|age| age > max_unused);
-        if stale || total + len > max_total {
+        over_limit = over_limit || (!stale && total + len > max_total);
+        if stale || over_limit {
             if let Err(e) = fs::remove_file(&path) {
                 warn!("Failed to remove piped document copy {path:?}: {e}");
             }
@@ -210,6 +214,8 @@ fn terminal_device_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use std::io::Cursor;
     use tempfile::TempDir;
 
@@ -287,5 +293,213 @@ mod tests {
         assert!(recent.exists());
         assert!(!older.exists(), "over the size limit");
         assert!(!stale.exists(), "unused for too long");
+    }
+
+    /// Yields `data` until `fail_at` bytes, then fails like a dropped connection.
+    struct FailingReader {
+        data: Vec<u8>,
+        pos: usize,
+        fail_at: usize,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pos >= self.fail_at {
+                return Err(io::Error::other("connection reset"));
+            }
+            let n = buf.len().min(self.fail_at - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn failed_read_leaves_nothing_behind() {
+        let data = epub_bytes(0);
+        let sniff = SNIFF_LEN as usize;
+        for fail_at in [0, 100, sniff - 1, sniff, sniff + 1, data.len() - 1] {
+            let dir = TempDir::new().unwrap();
+            let reader = FailingReader {
+                data: data.clone(),
+                pos: 0,
+                fail_at,
+            };
+
+            let err = copy_to_dir(reader, dir.path()).unwrap_err();
+
+            assert!(
+                format!("{err:#}").contains("connection reset"),
+                "fail at {fail_at}: {err:#}"
+            );
+            assert_eq!(file_count(dir.path()), 0, "fail at {fail_at}");
+        }
+    }
+
+    /// Hands out `data` a few bytes at a time, with spurious `Interrupted` errors.
+    struct ChoppyReader {
+        data: Vec<u8>,
+        pos: usize,
+        rng: StdRng,
+    }
+
+    impl Read for ChoppyReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.rng.gen_bool(0.2) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            let n = self
+                .rng
+                .gen_range(1..=7)
+                .min(buf.len())
+                .min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn choppy_reads_produce_the_same_copy() {
+        for seed in 0..50 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut data = b"%PDF-1.7\n".to_vec();
+            data.extend((0..rng.gen_range(0..20_000)).map(|_| rng.gen_range(0..=255u8)));
+            let whole_dir = TempDir::new().unwrap();
+            let choppy_dir = TempDir::new().unwrap();
+
+            let whole = copy_to_dir(Cursor::new(data.clone()), whole_dir.path()).unwrap();
+            let choppy = ChoppyReader {
+                data: data.clone(),
+                pos: 0,
+                rng,
+            };
+            let pieces = copy_to_dir(choppy, choppy_dir.path()).unwrap();
+
+            assert_eq!(whole.file_name(), pieces.file_name(), "seed {seed}");
+            assert_eq!(fs::read(&pieces).unwrap(), data, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn unwritable_cache_dir_is_an_error() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing");
+
+        let err = copy_to_dir(Cursor::new(epub_bytes(0)), &missing).unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("failed to create a file in"),
+            "{err:#}"
+        );
+        assert!(!missing.exists());
+    }
+
+    /// Accepts at most 3 bytes per write call.
+    struct TrickleWriter(Vec<u8>);
+
+    impl Write for TrickleWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let n = buf.len().min(3);
+            self.0.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn hash_covers_exactly_the_bytes_written() {
+        let data = epub_bytes(7);
+        let mut writer = HashingWriter {
+            inner: TrickleWriter(Vec::new()),
+            hasher: md5::Context::new(),
+        };
+
+        io::copy(&mut Cursor::new(&data), &mut writer).unwrap();
+
+        assert_eq!(writer.inner.0, data);
+        assert_eq!(
+            format!("{:x}", writer.hasher.compute()),
+            format!("{:x}", md5::compute(&data))
+        );
+    }
+
+    fn set_used(path: &Path, used: SystemTime) {
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(FileTimes::new().set_accessed(used).set_modified(used))
+            .unwrap();
+    }
+
+    fn last_used(path: &Path) -> SystemTime {
+        let meta = fs::metadata(path).unwrap();
+        meta.accessed().unwrap().max(meta.modified().unwrap())
+    }
+
+    #[test]
+    fn eviction_keeps_the_most_recently_used_copies_that_fit() {
+        let now = SystemTime::now();
+        let max_unused = Duration::from_secs(30 * 24 * 60 * 60);
+        let is_stale =
+            |used: SystemTime| now.duration_since(used).is_ok_and(|age| age > max_unused);
+
+        for seed in 0..300 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let dir = TempDir::new().unwrap();
+            let count = rng.gen_range(1..12);
+            let copies: Vec<(PathBuf, SystemTime, u64)> = (0..count)
+                .map(|i| {
+                    let path = dir.path().join(format!("stdin-{i}.pdf"));
+                    fs::write(&path, vec![0u8; rng.gen_range(0..1000)]).unwrap();
+                    let age = Duration::from_secs(rng.gen_range(0..60 * 24 * 60 * 60));
+                    set_used(&path, now - age);
+                    let len = fs::metadata(&path).unwrap().len();
+                    (path.clone(), last_used(&path), len)
+                })
+                .collect();
+            let (keep, _, keep_len) = copies[rng.gen_range(0..count)].clone();
+            let max_total = rng.gen_range(0..4000);
+
+            evict_copies(dir.path(), &keep, now, max_unused, max_total);
+
+            let ctx = format!("seed {seed}, limit {max_total}");
+            assert!(keep.exists(), "{ctx}: deleted the copy being opened");
+            let (kept, deleted): (Vec<_>, Vec<_>) = copies
+                .iter()
+                .filter(|(path, ..)| *path != keep)
+                .partition(|(path, ..)| path.exists());
+            let kept_total = keep_len + kept.iter().map(|(.., len)| len).sum::<u64>();
+            assert!(
+                kept.is_empty() || kept_total <= max_total,
+                "{ctx}: kept {kept_total} bytes"
+            );
+            assert!(
+                kept.iter().all(|(_, used, _)| !is_stale(*used)),
+                "{ctx}: kept a copy unused for too long"
+            );
+            let deleted_for_size: Vec<_> = deleted
+                .iter()
+                .filter(|(_, used, _)| !is_stale(*used))
+                .collect();
+            for (kept_path, kept_used, _) in &kept {
+                for (deleted_path, deleted_used, _) in &deleted_for_size {
+                    assert!(
+                        kept_used >= deleted_used,
+                        "{ctx}: kept {kept_path:?} but deleted the more recently used {deleted_path:?}"
+                    );
+                }
+            }
+            if let Some((_, _, len)) = deleted_for_size.iter().max_by_key(|(_, used, _)| *used) {
+                assert!(
+                    kept_total + len > max_total,
+                    "{ctx}: deleted a copy that still fit"
+                );
+            }
+        }
     }
 }
