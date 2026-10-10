@@ -4163,6 +4163,12 @@ impl App {
     }
 
     pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
+        if !self.is_main_panel(MainPanel::Content)
+            || self.is_pdf_mode()
+            || self.is_highlight_palette_active()
+        {
+            self.text_reader.close_annotation_peek();
+        }
         let draw_closure_start = std::time::Instant::now();
         #[cfg(feature = "pdf")]
         let mut pdf_area = None;
@@ -4276,6 +4282,7 @@ impl App {
         }
 
         self.render_highlight_palette(f);
+        self.text_reader.render_annotation_peek(f);
 
         #[cfg(feature = "pdf")]
         if self.has_active_popup()
@@ -5203,6 +5210,26 @@ impl App {
                     } else {
                         self.notifications.info("Text justification: off");
                     }
+                }
+                true
+            }
+            Action::ToggleInlineAnnotations => {
+                if self.current_book.is_some() && !self.is_pdf_mode() {
+                    let enabled = self.text_reader.toggle_inline_annotations();
+                    self.notifications.info(if enabled {
+                        "Inline annotations: shown"
+                    } else {
+                        "Inline annotations: hidden"
+                    });
+                }
+                true
+            }
+            Action::PeekAnnotation => {
+                if !self.is_pdf_mode()
+                    && self.is_main_panel(MainPanel::Content)
+                    && !self.text_reader.open_annotation_peek()
+                {
+                    self.notifications.info("No annotation under the cursor");
                 }
                 true
             }
@@ -6158,6 +6185,39 @@ impl App {
     }
 
     pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Option<AppAction> {
+        let dismiss_peek =
+            self.text_reader.is_annotation_peek_open() && self.key_sequence.is_empty() && {
+                use crate::keybindings::{
+                    action::Action, context::KeyContext, keymap::LookupResult,
+                    notation::key_event_to_input,
+                };
+                let context = if self.text_reader.is_normal_mode_active() {
+                    KeyContext::EpubNormal
+                } else {
+                    KeyContext::EpubContent
+                };
+                matches!(
+                    crate::keybindings::keymap().lookup(context, &[key_event_to_input(&key)]),
+                    LookupResult::Found(Action::Cancel)
+                )
+            };
+        if dismiss_peek {
+            self.text_reader.close_annotation_peek();
+            self.key_sequence.clear();
+            return None;
+        }
+        let action = self.handle_key_event_inner(key);
+        self.text_reader.validate_annotation_peek();
+        if !self.is_main_panel(MainPanel::Content)
+            || self.is_pdf_mode()
+            || self.is_highlight_palette_active()
+        {
+            self.text_reader.close_annotation_peek();
+        }
+        action
+    }
+
+    fn handle_key_event_inner(&mut self, key: crossterm::event::KeyEvent) -> Option<AppAction> {
         use crossterm::event::KeyCode;
 
         #[cfg(any(test, feature = "test-utils"))]
@@ -8674,6 +8734,62 @@ mod tests {
     use super::*;
     use crate::reading_history::ReadingHistoryAction;
     use crate::simple_fake_books::{FakeBookConfig, create_fake_epub_file};
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn epub_annotation_actions_leave_pdf_and_djvu_unchanged() {
+        use crate::keybindings::action::Action;
+        for extension in ["pdf", "djvu"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join("book.epub");
+            create_fake_epub_file(
+                &path,
+                &FakeBookConfig {
+                    title: "Test".into(),
+                    chapter_count: 1,
+                    words_per_chapter: 20,
+                },
+            )
+            .unwrap();
+            let mut app = App::new_with_config(
+                Some(dir.path().to_str().unwrap()),
+                Some("/dev/null"),
+                false,
+                Some(dir.path()),
+                None,
+            );
+            app.open_book_for_reading_by_path(path.to_str().unwrap(), None)
+                .unwrap();
+            app.pdf_reader = Some(PdfReaderState::new(
+                format!("book.{extension}"),
+                true,
+                false,
+                0,
+                1.0,
+                0,
+                0,
+                current_theme().clone(),
+                0,
+                false,
+                false,
+                None,
+                String::new(),
+                app.settings.clone(),
+            ));
+            app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+            let before = serde_yaml::to_string(app.settings.load().as_ref()).unwrap();
+            assert!(app.dispatch_global_action(Action::ToggleInlineAnnotations));
+            assert!(app.dispatch_global_action(Action::PeekAnnotation));
+            assert!(app.text_reader.show_inline_annotations());
+            assert!(!app.text_reader.is_annotation_peek_open());
+            assert_eq!(
+                before,
+                serde_yaml::to_string(app.settings.load().as_ref()).unwrap()
+            );
+            assert!(app.is_pdf_mode());
+            assert_eq!(app.focused_panel, FocusedPanel::Main(MainPanel::Content));
+        }
+    }
 
     /// Regression test for https://github.com/bugzmanov/bookokrat/issues/104
     ///

@@ -607,6 +607,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn set_current_chapter_file(&mut self, chapter_file: Option<String>) {
+        if self.current_chapter_file != chapter_file {
+            self.close_annotation_peek();
+        }
         self.current_chapter_file = chapter_file;
         self.rebuild_chapter_comments();
     }

@@ -125,6 +125,8 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space>C" => Action::CopyTocItem);
     bind!(ctx, "<Space>j" => Action::ToggleJustifyText);
     bind!(ctx, "<Space>a" => Action::ToggleCommentsViewer);
+    bind!(ctx, "<Space>i" => Action::ToggleInlineAnnotations);
+    bind!(ctx, "<Space>k" => Action::PeekAnnotation);
     bind!(ctx, "<Space>s" => Action::OpenSettings);
     bind!(ctx, "<Space>z" => Action::ToggleZenMode);
     bind!(ctx, "<Space>b" => Action::ToggleZenBorder);

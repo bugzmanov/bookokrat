@@ -177,6 +177,9 @@ pub struct Settings {
     #[serde(default)]
     pub justify_text: bool,
 
+    #[serde(default = "default_true")]
+    pub show_inline_annotations: bool,
+
     #[serde(default)]
     pub invert_scroll_direction: bool,
 
@@ -235,6 +238,7 @@ impl Default for Settings {
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             justify_text: false,
+            show_inline_annotations: true,
             invert_scroll_direction: false,
             zen_hide_border: false,
             book_sort_order: BookSortOrder::default(),
@@ -780,6 +784,12 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         BookSortOrder::ByType => "by_type",
     };
     content.push_str(&format!("justify_text: {}\n", settings.justify_text));
+    content
+        .push_str("# Initial EPUB annotation visibility; Space+i toggles it for this session.\n");
+    content.push_str(&format!(
+        "show_inline_annotations: {}\n",
+        settings.show_inline_annotations
+    ));
     content.push_str(&format!(
         "invert_scroll_direction: {}\n",
         settings.invert_scroll_direction
@@ -916,6 +926,30 @@ pub fn get_custom_themes() -> Vec<YamlTheme> {
 mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
+
+    #[test]
+    fn inline_annotation_default_and_session_override() {
+        let legacy: Settings = serde_yaml::from_str("justify_text: true\n").unwrap();
+        assert!(legacy.show_inline_annotations);
+        let configured: Settings =
+            serde_yaml::from_str("show_inline_annotations: false\n").unwrap();
+        assert!(!configured.show_inline_annotations);
+        assert!(
+            generate_settings_yaml(&Settings::default()).contains("show_inline_annotations: true")
+        );
+
+        let persistence = Arc::new(RecordingPersistence::default());
+        let settings = RuntimeSettings::with_persistence(configured, persistence.clone());
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new_without_image_support(
+            settings.clone(),
+        );
+        assert!(!reader.show_inline_annotations());
+        assert!(reader.toggle_inline_annotations());
+        assert!(!settings.load().show_inline_annotations);
+        assert!(persistence.writes.lock().unwrap().is_empty());
+        settings.update(|s| s.justify_text = true);
+        assert!(!persistence.writes.lock().unwrap()[0].show_inline_annotations);
+    }
 
     #[derive(Default)]
     struct RecordingPersistence {
