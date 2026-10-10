@@ -1118,7 +1118,24 @@ impl SettingsPopup {
         pdf_enabled: bool,
         current_mode: PdfRenderMode,
     ) -> Vec<Line<'static>> {
-        if !self.supports_graphics {
+        if !self.supports_graphics && crate::terminal::images_disabled() {
+            vec![
+                Line::from(vec![
+                    Span::styled("ⓘ ", Style::default().fg(palette.base_03)),
+                    Span::styled(
+                        "PDF/DJVU viewing is off",
+                        Style::default().fg(palette.base_03),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(
+                        "(started with --no-images).",
+                        Style::default().fg(palette.base_03),
+                    ),
+                ]),
+            ]
+        } else if !self.supports_graphics {
             vec![
                 Line::from(vec![
                     Span::styled("ⓘ ", Style::default().fg(palette.base_03)),

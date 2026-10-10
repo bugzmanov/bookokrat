@@ -697,7 +697,12 @@ impl App {
         #[cfg(any(test, feature = "test-utils"))]
         let mut text_reader = MarkdownTextReader::new_without_image_support(settings.clone());
         #[cfg(not(any(test, feature = "test-utils")))]
-        let mut text_reader = MarkdownTextReader::new(settings.clone());
+        let mut text_reader = if crate::terminal::images_disabled() {
+            MarkdownTextReader::new_without_image_support(settings.clone())
+        } else {
+            MarkdownTextReader::new(settings.clone())
+        };
+        text_reader.set_images_disabled(crate::terminal::images_disabled());
         let initial_settings = settings.load();
         text_reader.set_margin(initial_settings.margin);
         text_reader.set_justify_text(initial_settings.justify_text);
@@ -833,15 +838,19 @@ impl App {
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode without Kitty protocol)
+        // --no-images hides the real capabilities; don't persist a downgrade.
         #[cfg(feature = "pdf")]
-        app.settings
-            .fix_incompatible_pdf_settings(startup_caps.pdf.supports_scroll_mode);
+        if !crate::terminal::images_disabled() {
+            app.settings
+                .fix_incompatible_pdf_settings(startup_caps.pdf.supports_scroll_mode);
+        }
 
         let is_first_time_user = app.home_bookmarks().get_most_recent().is_none();
 
         if auto_load_recent
             && let Some((recent_path, _)) = app.home_bookmarks().get_most_recent()
             && app.book_manager.contains_book(&recent_path)
+            && !Self::blocked_by_no_images(&recent_path)
         {
             if let Err(e) = app.open_book_for_reading_by_path(&recent_path, None) {
                 error!("Failed to auto-load most recent book: {e}");
@@ -1011,6 +1020,23 @@ impl App {
         }
     }
 
+    /// PDF and DjVu pages are images, so `--no-images` makes them unopenable.
+    fn blocked_by_no_images(path: &str) -> bool {
+        #[cfg(feature = "pdf")]
+        {
+            crate::terminal::images_disabled()
+                && matches!(
+                    BookManager::detect_format(path),
+                    Some(BookFormat::Pdf | BookFormat::Djvu)
+                )
+        }
+        #[cfg(not(feature = "pdf"))]
+        {
+            let _ = path;
+            false
+        }
+    }
+
     /// Open a book for reading by index - delegates to path-based opening
     pub fn open_book_for_reading(&mut self, book_index: usize) -> Result<()> {
         if let Some(book_info) = self.book_manager.get_book_info(book_index) {
@@ -1073,6 +1099,9 @@ impl App {
     ) -> Result<()> {
         let format = BookManager::detect_format(path)
             .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
+        if Self::blocked_by_no_images(path) {
+            anyhow::bail!(crate::terminal::NO_IMAGES_PDF_MESSAGE);
+        }
 
         match (&format, &position) {
             (BookFormat::Epub | BookFormat::Html, Some(OpenPosition::Page(_))) => {
@@ -1254,8 +1283,10 @@ impl App {
         self.jump_list.clear();
 
         let path_buf = std::path::PathBuf::from(path);
-        if let Err(e) = self.book_images.load_book(&path_buf) {
-            error!("Failed to load book in BookImages: {e}");
+        if !crate::terminal::images_disabled() {
+            if let Err(e) = self.book_images.load_book(&path_buf) {
+                error!("Failed to load book in BookImages: {e}");
+            }
         }
 
         // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state
@@ -2113,7 +2144,9 @@ impl App {
                 if self.book_manager.contains_book(&path) {
                     self.set_main_panel_focus(MainPanel::Content);
                     self.reading_history = None;
-                    let _ = self.open_book_for_reading_by_path(&path, None);
+                    if let Err(e) = self.open_book_for_reading_by_path(&path, None) {
+                        self.show_error(format!("Failed to open book: {e}"));
+                    }
                 }
             }
             ReadingHistoryAction::OpenBookAbsolute {

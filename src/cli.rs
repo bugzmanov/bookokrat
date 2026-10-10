@@ -25,6 +25,10 @@ pub struct Cli {
     #[arg(long)]
     pub zen_mode: bool,
 
+    /// Don't display images (text only); PDF and DjVu files can't be opened
+    #[arg(long)]
+    pub no_images: bool,
+
     /// Open the most recently read book across all libraries
     #[arg(long, short = 'c')]
     pub continue_reading: bool,

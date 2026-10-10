@@ -198,6 +198,11 @@ fn main() -> Result<()> {
         return handle_synctex_forward(fwd, args.file.as_deref());
     }
 
+    // Before any terminal detection, which caches its results.
+    if args.no_images {
+        bookokrat::terminal::disable_images();
+    }
+
     // A piped document is read from its own library, not from where it came from.
     let piped = args.file.as_deref().is_some_and(piped_input::is_stream_arg);
     let library_file = if piped { None } else { args.file.as_deref() };
@@ -253,6 +258,9 @@ fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         std::process::id()
     );
+    if args.no_images {
+        info!("Images disabled (--no-images)");
+    }
 
     // A piped document is copied into the cache before anything else touches stdin.
     let file = args.file.as_deref().map(resolve_input_path);
@@ -265,6 +273,26 @@ fn main() -> Result<()> {
         }
         if bookokrat::book_manager::BookManager::detect_format(path).is_none() {
             eprintln!("Error: unsupported file format: {path}");
+            std::process::exit(1);
+        }
+        #[cfg(feature = "pdf")]
+        if args.no_images
+            && matches!(
+                bookokrat::book_manager::BookManager::detect_format(path),
+                Some(
+                    bookokrat::book_manager::BookFormat::Pdf
+                        | bookokrat::book_manager::BookFormat::Djvu
+                )
+            )
+        {
+            let shown = args
+                .file
+                .as_deref()
+                .map_or(path.as_str(), piped_input::describe);
+            eprintln!(
+                "Error: {shown}: {}",
+                bookokrat::terminal::NO_IMAGES_PDF_MESSAGE
+            );
             std::process::exit(1);
         }
     }
@@ -339,7 +367,7 @@ fn main() -> Result<()> {
             caps.env.kitty_pid,
             caps.env.wezterm_executable,
         );
-        if caps.env.tmux {
+        if caps.env.tmux && !terminal::images_disabled() {
             bookokrat::pdf::kittyv2::set_tmux(true);
             terminal::enable_tmux_passthrough();
         }

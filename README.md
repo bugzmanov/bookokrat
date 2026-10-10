@@ -104,6 +104,7 @@ bookokrat path/to/book.epub
 bookokrat path/to/book.pdf
 bookokrat path/to/book.djvu
 bookokrat path/to/book.epub --zen-mode
+bookokrat path/to/book.epub --no-images   # text only; PDF and DJVU can't be opened
 ```
 
 Press `?` inside the app to open the built-in help.

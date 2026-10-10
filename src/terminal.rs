@@ -1,10 +1,27 @@
 use std::env;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "pdf")]
 use log::warn;
 
 use crate::vendored::ratatui_image::picker::{Capability, Picker, ProtocolType};
+
+static IMAGES_DISABLED: AtomicBool = AtomicBool::new(false);
+
+pub const NO_IMAGES_PDF_MESSAGE: &str =
+    "PDF and DjVu pages are images, so they can't be opened with --no-images";
+
+/// `--no-images`: no graphics protocol is chosen, no terminal graphics queries
+/// are sent, and PDF/DjVu can't be opened. Must be called before any terminal
+/// detection, since detection results are cached.
+pub fn disable_images() {
+    IMAGES_DISABLED.store(true, Ordering::Relaxed);
+}
+
+pub fn images_disabled() -> bool {
+    IMAGES_DISABLED.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalKind {
@@ -123,7 +140,7 @@ pub fn detect_terminal_with_probe() -> TerminalCapabilities {
     PROBED_CAPS
         .get_or_init(|| {
             let mut caps = detect_terminal();
-            if caps.protocol.is_none() {
+            if caps.protocol.is_none() && !images_disabled() {
                 caps = match crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
                     Ok(mut picker) => detect_terminal_with_picker(&mut picker),
                     Err(_) => caps,
@@ -176,7 +193,8 @@ pub fn detect_terminal_from_env(env: TerminalEnv) -> TerminalCapabilities {
     };
 
     apply_protocol_overrides(&mut caps, None);
-    caps.supports_graphics = protocol_supports_graphics(caps.protocol) || supports_graphics;
+    caps.supports_graphics =
+        !images_disabled() && (protocol_supports_graphics(caps.protocol) || supports_graphics);
     refresh_pdf_capabilities(&mut caps);
 
     caps
@@ -447,6 +465,10 @@ fn apply_protocol_overrides(caps: &mut TerminalCapabilities, picker: Option<&mut
     // 2) Known terminal policy (work around terminal-specific bugs)
     // 3) Env-based guess
     // 4) Picker capability result
+    if images_disabled() {
+        caps.protocol = None;
+        return;
+    }
     let override_protocol = protocol_override_graphics_from_env();
     if let Some(forced) = override_protocol {
         caps.protocol = Some(forced);
@@ -553,6 +575,11 @@ fn derive_pdf_capabilities(
                 iterm_version.clone()
             }
         ));
+    }
+
+    if images_disabled() {
+        supported = false;
+        blocked_reason = Some(NO_IMAGES_PDF_MESSAGE.to_string());
     }
 
     let supports_comments = matches!(

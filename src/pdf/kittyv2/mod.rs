@@ -383,6 +383,9 @@ fn place_image_relative_to_tmux_anchor(
 
 /// Delete all images.
 pub fn delete_all_images() -> io::Result<()> {
+    if crate::terminal::images_disabled() {
+        return Ok(());
+    }
     let mut stdout = io::stdout();
     let tmux = is_tmux_mode();
     DeleteCommand::all()

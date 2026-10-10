@@ -91,10 +91,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     /// Check if a Text contains an image and return its URL if found
-    fn extract_image_from_text(text: &MarkdownText) -> Option<String> {
+    /// The first image in `text` as `(url, alt_text)`.
+    fn extract_image_from_text(text: &MarkdownText) -> Option<(String, String)> {
         for item in text.iter() {
-            if let TextOrInline::Inline(Inline::Image { url, .. }) = item {
-                return Some(url.clone());
+            if let TextOrInline::Inline(Inline::Image { url, alt_text, .. }) = item {
+                return Some((url.clone(), alt_text.clone()));
             }
         }
         None
@@ -1152,7 +1153,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     current_rich_spans.extend(rich_spans);
                     current_chunk_items.push(item);
                 }
-                TextOrInline::Inline(Inline::Image { url, .. }) => {
+                TextOrInline::Inline(Inline::Image { url, alt_text, .. }) => {
                     // If we have accumulated text before the image, render it first
                     if !current_rich_spans.is_empty() {
                         let chunk_canonical_len = current_chunk_items
@@ -1186,7 +1187,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
 
                     // Render the image as a separate block
-                    self.render_image_placeholder(url, lines, total_height, width, palette);
+                    self.render_image_placeholder(
+                        url,
+                        alt_text,
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                    );
                     has_content = true;
                 }
                 TextOrInline::Inline(Inline::Anchor { .. }) => {
@@ -1234,7 +1242,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
 
                     // Extract the image URL from the link text
-                    let image_url = Self::extract_image_from_text(link_text).unwrap();
+                    let (image_url, image_alt) = Self::extract_image_from_text(link_text).unwrap();
 
                     // Create link info for the image
                     let link_info = LinkInfo {
@@ -1251,6 +1259,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     // Render the image with link info attached
                     self.render_image_placeholder_with_link(
                         &image_url,
+                        &image_alt,
                         lines,
                         total_height,
                         width,
@@ -4117,7 +4126,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         for item in content.iter() {
             match item {
-                TextOrInline::Inline(Inline::Image { url, .. }) => {
+                TextOrInline::Inline(Inline::Image { url, alt_text, .. }) => {
                     // Flush accumulated text before image
                     if !current_rich_spans.is_empty() {
                         let chunk_canonical_len = current_chunk_items
@@ -4154,7 +4163,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         current_chunk_items.clear();
                         is_first_chunk = false;
                     }
-                    self.render_image_placeholder(url, lines, total_height, width, palette);
+                    self.render_image_placeholder(
+                        url,
+                        alt_text,
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                    );
                 }
                 TextOrInline::Inline(Inline::Link {
                     text: link_text,
@@ -4200,7 +4216,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         current_chunk_items.clear();
                         is_first_chunk = false;
                     }
-                    let image_url = Self::extract_image_from_text(link_text).unwrap();
+                    let (image_url, image_alt) = Self::extract_image_from_text(link_text).unwrap();
                     let link_info = LinkInfo {
                         text: String::new(),
                         url: url.clone(),
@@ -4213,6 +4229,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     };
                     self.render_image_placeholder_with_link(
                         &image_url,
+                        &image_alt,
                         lines,
                         total_height,
                         width,
@@ -4560,23 +4577,47 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     fn render_image_placeholder(
         &mut self,
         url: &str,
+        alt_text: &str,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
         palette: &Base16Palette,
     ) {
-        self.render_image_placeholder_with_link(url, lines, total_height, width, palette, None);
+        self.render_image_placeholder_with_link(
+            url,
+            alt_text,
+            lines,
+            total_height,
+            width,
+            palette,
+            None,
+        );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_image_placeholder_with_link(
         &mut self,
         url: &str,
+        alt_text: &str,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
         palette: &Base16Palette,
         link_info: Option<LinkInfo>,
     ) {
+        if self.images_disabled {
+            self.render_image_label(
+                url,
+                alt_text,
+                lines,
+                total_height,
+                width,
+                palette,
+                link_info,
+            );
+            return;
+        }
+
         // Add empty line before image
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
@@ -4686,6 +4727,81 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Add empty line after image
+        lines.push(RenderedLine::empty());
+        self.raw_text_lines.push(String::new());
+        *total_height += 1;
+    }
+
+    /// `--no-images`: one `[image: alt]` line instead of the image box. Falls
+    /// back to the file name when the image has no alt text.
+    #[allow(clippy::too_many_arguments)]
+    fn render_image_label(
+        &mut self,
+        url: &str,
+        alt_text: &str,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        link_info: Option<LinkInfo>,
+    ) {
+        let alt = alt_text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let name = if alt.is_empty() {
+            url.rsplit('/').next().unwrap_or(url).to_string()
+        } else {
+            alt
+        };
+        let full = format!("[image: {name}]");
+        let label = if full.chars().count() <= width {
+            full
+        } else {
+            let kept: String = full.chars().take(width.saturating_sub(2)).collect();
+            format!("{kept}…]")
+        };
+        let label_len = label.chars().count();
+
+        if lines
+            .last()
+            .is_some_and(|line| !line.raw_text.trim().is_empty())
+        {
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
+        }
+
+        let link_nodes = link_info
+            .map(|mut info| {
+                info.line = lines.len();
+                info.start_col = 0;
+                info.end_col = label_len.saturating_sub(1);
+                info
+            })
+            .into_iter()
+            .collect();
+        lines.push(RenderedLine {
+            spans: vec![Span::styled(
+                label.clone(),
+                RatatuiStyle::default()
+                    .fg(palette.base_03)
+                    .add_modifier(Modifier::ITALIC),
+            )],
+            raw_text: label,
+            line_type: LineType::ImagePlaceholder {
+                src: url.to_string(),
+            },
+            link_nodes,
+            node_anchor: None,
+            node_index: None,
+            code_line: None,
+            inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
+            justify_map: None,
+            annotatable_segment: None,
+        });
+        self.raw_text_lines.push(String::new());
+        *total_height += 1;
+
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -5121,5 +5237,90 @@ beta beta beta beta beta</pre>"#;
                 }
             }
         }
+    }
+
+    fn render_without_images(
+        html: &str,
+        width: usize,
+    ) -> crate::markdown_text_reader::RenderedContent {
+        let doc = HtmlToMarkdownConverter::new().convert(html);
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
+        reader.set_images_disabled(true);
+        reader.render_document_to_lines(&doc, width, theme::current_theme(), true)
+    }
+
+    #[test]
+    fn no_images_renders_one_line_label_per_image() {
+        let html = r#"
+        <p>Before</p>
+        <p><img src="images/fig1.png" alt="Pipeline   diagram"/></p>
+        <p><img src="images/cover.jpg"/></p>
+        <p>After</p>
+        "#;
+        let rendered = render_without_images(html, 60);
+        let texts: Vec<&str> = rendered.lines.iter().map(|l| l.raw_text.as_str()).collect();
+
+        assert!(texts.contains(&"[image: Pipeline diagram]"), "{texts:?}");
+        assert!(texts.contains(&"[image: cover.jpg]"), "{texts:?}");
+        assert!(
+            !texts.iter().any(|t| t.contains('┌') || t.contains('│')),
+            "image boxes must not be drawn: {texts:?}"
+        );
+        let label_lines = rendered
+            .lines
+            .iter()
+            .filter(|l| l.raw_text.starts_with("[image:"))
+            .count();
+        assert_eq!(label_lines, 2);
+        assert_eq!(
+            texts,
+            [
+                "Before",
+                "",
+                "[image: Pipeline diagram]",
+                "",
+                "[image: cover.jpg]",
+                "",
+                "After",
+                ""
+            ],
+            "one blank line around each label"
+        );
+    }
+
+    #[test]
+    fn no_images_label_keeps_image_link_clickable() {
+        let html = r#"<p><a href="https://example.com/"><img src="logo.png" alt="Logo"/></a></p>"#;
+        let rendered = render_without_images(html, 60);
+        let (idx, line) = rendered
+            .lines
+            .iter()
+            .enumerate()
+            .find(|(_, l)| l.raw_text == "[image: Logo]")
+            .expect("label line");
+
+        assert_eq!(line.link_nodes.len(), 1);
+        assert_eq!(line.link_nodes[0].url, "https://example.com/");
+        assert_eq!(line.link_nodes[0].line, idx);
+        assert_eq!(
+            line.link_nodes[0].end_col,
+            "[image: Logo]".chars().count() - 1
+        );
+    }
+
+    #[test]
+    fn no_images_label_is_truncated_to_width() {
+        let html = r#"<p><img src="a.png" alt="A very long description of a figure"/></p>"#;
+        let rendered = render_without_images(html, 20);
+        let label = rendered
+            .lines
+            .iter()
+            .find(|l| l.raw_text.starts_with("[image:"))
+            .expect("label line");
+
+        assert_eq!(label.raw_text, "[image: A very lon…]");
+        assert_eq!(label.raw_text.chars().count(), 20);
     }
 }
