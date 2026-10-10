@@ -2,6 +2,35 @@
 
 ## Ghostty + tmux: relative placements are not anchored to Unicode placeholders
 
+**Status: fixed upstream, not yet in a stable release.**
+
+- Fixed by `ghostty-org/ghostty#13939` ("kitty graphics: support relative
+  placements"), merged 2026-08-20 (merge commit `08450e21e5`). It adds parent
+  resolution for puts, reaping of orphaned children, and Unicode-placeholder
+  parents.
+- Not in `v1.3.1`, the latest stable tag as of 2026-10-10. Only tip builds
+  have it. Tip reports itself as `1.3.2-main+<sha>`, including tip builds from
+  before the fix, so the version string alone can't tell whether a build has
+  the fix.
+- Confirmed in `bugzmanov/bookokrat#179`: with Ghostty
+  `1.3.2-main-+c2906398b` and tmux 3.6b, forcing the anchor path (by making
+  `#{client_termtype}` report `kitty`) fixed the stale page after a tmux window
+  switch, with no misplacement or leaked pages.
+- Bookokrat now probes Ghostty+tmux at startup
+  (`kittyv2::probe_relative_placement_support`): it places a probe image
+  relative to a missing parent. Fixed Ghostty answers
+  `ENOPARENT: parent image not found` and gets anchors; 1.3.1 answers `OK` and
+  keeps the classic placement path. Ghostty also needs SHM for anchors, since
+  the anchor path can't transmit any other way. Kitty's gate is unchanged
+  (anchors whenever it runs under tmux, no probe). `BOOKOKRAT_TMUX_ANCHORS=on|off`
+  overrides the decision. The decision is logged as
+  `tmux placeholder anchors: <bool>`.
+- Ghostty 1.3.1 itself can't be fixed this way: it ignores `P=`/`Q=`, and
+  forcing anchors on there draws the page in the wrong place and still leaves
+  it painted after a window switch.
+
+Original investigation (Ghostty `v1.3.1` and earlier):
+
 Bookokrat's Kitty+tmux fix uses the Kitty graphics protocol's intended tmux
 ownership model:
 
@@ -35,12 +64,12 @@ Implementation notes from the investigation:
 
 - Ghostty has historical relative-placement discussion in
   `ghostty-org/ghostty#720`, closed by `ghostty-org/ghostty#2015`.
-- Later Ghostty code parses `P/Q/H/V`, but the placement execution/storage path
-  still only tracks normal and virtual placement state, not a live parent-child
-  placement relationship.
+- Before `#13939`, Ghostty parsed `P/Q/H/V`, but the placement
+  execution/storage path only tracked normal and virtual placement state, not a
+  live parent-child placement relationship.
 - Because this is terminal-side protocol behavior, Bookokrat should keep the
-  Kitty+tmux relative-anchor implementation and document Ghostty+tmux as
-  currently blocked rather than adding a second, fragile rendering path.
+  Kitty+tmux relative-anchor implementation rather than adding a second,
+  fragile rendering path, and enable it for Ghostty once support is detected.
 
 ## Ghostty bug: `d=r` / `d=R` does not respect its `x`/`y` ID-range bounds
 

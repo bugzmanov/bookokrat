@@ -341,18 +341,16 @@ fn main() -> Result<()> {
         );
         if caps.env.tmux {
             bookokrat::pdf::kittyv2::set_tmux(true);
-            // Only Kitty currently handles Unicode-placeholder-relative
-            // placements correctly through tmux. Ghostty+tmux advertises the
-            // Kitty protocol, but this anchor path misplaces/leaks pages there.
-            bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(
-                caps.kind == terminal::TerminalKind::Kitty,
-            );
             terminal::enable_tmux_passthrough();
-        } else {
-            bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(false);
         }
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));
+        let _ = terminal::probe_kitty_relative_placement_support(&caps);
+        let tmux_anchors = terminal::supports_tmux_placeholder_anchors(&caps);
+        if caps.env.tmux {
+            info!("tmux placeholder anchors: {tmux_anchors}");
+        }
+        bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(tmux_anchors);
 
         // SGR-pixel mouse (?1016) is supported by Kitty and Ghostty. Skip under
         // tmux: it intercepts mouse reporting and forwards cell coordinates,

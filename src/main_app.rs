@@ -1465,7 +1465,7 @@ impl App {
             None => crate::terminal::detect_terminal_with_probe(),
         };
         crate::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(
-            caps.env.tmux && caps.kind == crate::terminal::TerminalKind::Kitty,
+            crate::terminal::supports_tmux_placeholder_anchors(&caps),
         );
         self.pdf_supports_graphics = caps.supports_graphics;
         self.book_manager.supports_graphics = caps.supports_graphics;

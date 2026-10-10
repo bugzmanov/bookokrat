@@ -655,6 +655,78 @@ pub fn probe_kitty_delete_range_support(caps: &TerminalCapabilities) -> Option<b
 }
 
 #[cfg(feature = "pdf")]
+static PROBED_KITTY_RELATIVE_PLACEMENT_SUPPORT: OnceLock<bool> = OnceLock::new();
+
+/// Kitty is assumed to support relative placements. Ghostty only implements
+/// them after 1.3.1 (ghostty-org/ghostty#13939), and tip builds report the
+/// same version before and after that change, so Ghostty is probed instead.
+#[cfg(feature = "pdf")]
+pub fn probe_kitty_relative_placement_support(caps: &TerminalCapabilities) -> Option<bool> {
+    if !caps.env.tmux
+        || caps.kind != TerminalKind::Ghostty
+        || !matches!(caps.protocol, Some(GraphicsProtocol::Kitty))
+        || tmux_anchors_override_from_env().is_some()
+    {
+        return None;
+    }
+    Some(
+        *PROBED_KITTY_RELATIVE_PLACEMENT_SUPPORT
+            .get_or_init(crate::pdf::kittyv2::probe_relative_placement_support),
+    )
+}
+
+/// Whether PDF pages under tmux should be anchored to Unicode placeholders so
+/// that tmux owns them and hides them with their window. Never probes:
+/// `probe_kitty_shm_support` and `probe_kitty_relative_placement_support` must
+/// run at startup first.
+#[cfg(feature = "pdf")]
+pub fn supports_tmux_placeholder_anchors(caps: &TerminalCapabilities) -> bool {
+    tmux_placeholder_anchors_enabled(
+        caps.env.tmux,
+        &caps.kind,
+        caps.protocol,
+        tmux_anchors_override_from_env(),
+        cached_kitty_shm_support(caps.protocol),
+        PROBED_KITTY_RELATIVE_PLACEMENT_SUPPORT.get().copied(),
+    )
+}
+
+#[cfg(feature = "pdf")]
+fn tmux_placeholder_anchors_enabled(
+    tmux: bool,
+    kind: &TerminalKind,
+    protocol: Option<GraphicsProtocol>,
+    forced: Option<bool>,
+    shm_support: Option<bool>,
+    relative_placement_support: Option<bool>,
+) -> bool {
+    if !tmux {
+        return false;
+    }
+    let kitty_protocol = matches!(protocol, Some(GraphicsProtocol::Kitty));
+    match (forced, kind) {
+        (Some(forced), _) => forced && kitty_protocol,
+        (None, TerminalKind::Kitty) => true,
+        // The anchor path can only transmit pages through SHM; without it
+        // Ghostty stays on the classic placement path.
+        (None, TerminalKind::Ghostty) => {
+            kitty_protocol && shm_support == Some(true) && relative_placement_support == Some(true)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "pdf")]
+fn tmux_anchors_override_from_env() -> Option<bool> {
+    let value = env::var("BOOKOKRAT_TMUX_ANCHORS").ok()?;
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "on" | "true" | "yes" => Some(true),
+        "0" | "off" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "pdf")]
 pub fn enable_tmux_passthrough() {
     let _ = std::process::Command::new("tmux")
         .args(["set", "-p", "allow-passthrough", "on"])
@@ -751,5 +823,128 @@ mod underline_color_tests {
                 "PDF should stay supported on {protocol:?}"
             );
         }
+    }
+}
+
+#[cfg(all(test, feature = "pdf"))]
+mod tmux_placeholder_anchor_tests {
+    use super::*;
+
+    const KITTY: Option<GraphicsProtocol> = Some(GraphicsProtocol::Kitty);
+
+    #[test]
+    fn kitty_uses_anchors_without_probe() {
+        assert!(tmux_placeholder_anchors_enabled(
+            true,
+            &TerminalKind::Kitty,
+            KITTY,
+            None,
+            Some(true),
+            None,
+        ));
+    }
+
+    #[test]
+    fn ghostty_follows_relative_placement_probe() {
+        for (probe, expected) in [(Some(true), true), (Some(false), false), (None, false)] {
+            assert_eq!(
+                tmux_placeholder_anchors_enabled(
+                    true,
+                    &TerminalKind::Ghostty,
+                    KITTY,
+                    None,
+                    Some(true),
+                    probe,
+                ),
+                expected,
+                "probe={probe:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn anchors_require_tmux() {
+        assert!(!tmux_placeholder_anchors_enabled(
+            false,
+            &TerminalKind::Kitty,
+            KITTY,
+            None,
+            Some(true),
+            None,
+        ));
+    }
+
+    #[test]
+    fn kitty_anchors_do_not_depend_on_shm() {
+        for shm in [Some(true), Some(false), None] {
+            assert!(
+                tmux_placeholder_anchors_enabled(
+                    true,
+                    &TerminalKind::Kitty,
+                    KITTY,
+                    None,
+                    shm,
+                    None
+                ),
+                "shm={shm:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ghostty_anchors_require_kitty_protocol_and_shm() {
+        assert!(!tmux_placeholder_anchors_enabled(
+            true,
+            &TerminalKind::Ghostty,
+            Some(GraphicsProtocol::Sixel),
+            None,
+            Some(true),
+            Some(true),
+        ));
+        for shm in [Some(false), None] {
+            assert!(
+                !tmux_placeholder_anchors_enabled(
+                    true,
+                    &TerminalKind::Ghostty,
+                    KITTY,
+                    None,
+                    shm,
+                    Some(true),
+                ),
+                "shm={shm:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_override_wins_over_terminal_kind() {
+        assert!(tmux_placeholder_anchors_enabled(
+            true,
+            &TerminalKind::Ghostty,
+            KITTY,
+            Some(true),
+            Some(true),
+            Some(false),
+        ));
+        assert!(!tmux_placeholder_anchors_enabled(
+            true,
+            &TerminalKind::Kitty,
+            KITTY,
+            Some(false),
+            Some(true),
+            None,
+        ));
+    }
+
+    #[test]
+    fn other_terminals_do_not_use_anchors() {
+        assert!(!tmux_placeholder_anchors_enabled(
+            true,
+            &TerminalKind::WezTerm,
+            KITTY,
+            None,
+            Some(true),
+            Some(true),
+        ));
     }
 }
