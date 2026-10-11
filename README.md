@@ -41,6 +41,13 @@ nix run github:bugzmanov/bookokrat
 nix profile install github:bugzmanov/bookokrat
 ```
 
+### Void Linux (unofficial repo)
+
+```bash
+echo repository=https://raw.githubusercontent.com/Event-Horizon-VL/blackhole-vl/repository-x86_64 | sudo tee /etc/xbps.d/20-repository-extra.conf
+sudo xbps-install -S bookokrat
+```
+
 ### Prebuilt Linux binaries
 
 Download from [GitHub Releases](https://github.com/bugzmanov/bookokrat/releases).
