@@ -57,6 +57,8 @@ pub struct TerminalEnv {
     pub kitty_window: bool,
     pub kitty_pid: bool,
     pub tmux: bool,
+    /// `WT_SESSION` is set: running inside Windows Terminal.
+    pub windows_terminal: bool,
 }
 
 impl TerminalEnv {
@@ -85,6 +87,7 @@ impl TerminalEnv {
             kitty_window: env::var("KITTY_WINDOW_ID").is_ok(),
             kitty_pid: env::var("KITTY_PID").is_ok(),
             tmux: env::var("TMUX").is_ok(),
+            windows_terminal: env::var("WT_SESSION").is_ok_and(|v| !v.is_empty()),
         }
     }
 }
@@ -98,6 +101,10 @@ pub struct PdfCapabilities {
     pub supports_normal_mode: bool,
     pub supports_kitty_shm: Option<bool>,
     pub supports_kitty_delete_range: Option<bool>,
+    /// Sixel pages may scroll the strip rectangle inside the terminal (DECLRMM/DECSLRM)
+    /// instead of re-sending every strip. WezTerm and Windows Terminal implement it;
+    /// tmux does not.
+    pub sixel_margin_scroll: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -189,6 +196,7 @@ pub fn detect_terminal_from_env(env: TerminalEnv) -> TerminalCapabilities {
             supports_normal_mode: false,
             supports_kitty_shm: None,
             supports_kitty_delete_range: None,
+            sixel_margin_scroll: false,
         },
     };
 
@@ -593,6 +601,9 @@ fn derive_pdf_capabilities(
             _ => supports_kitty_shm == Some(true),
         };
     let supports_normal_mode = caps.kind != TerminalKind::ITerm;
+    let sixel_margin_scroll = matches!(caps.protocol, Some(GraphicsProtocol::Sixel))
+        && !caps.env.tmux
+        && (caps.kind == TerminalKind::WezTerm || caps.env.windows_terminal);
 
     PdfCapabilities {
         supported,
@@ -602,6 +613,7 @@ fn derive_pdf_capabilities(
         supports_normal_mode,
         supports_kitty_shm,
         supports_kitty_delete_range,
+        sixel_margin_scroll,
     }
 }
 
@@ -798,6 +810,7 @@ mod underline_color_tests {
             kitty_window: false,
             kitty_pid: false,
             tmux: false,
+            windows_terminal: false,
         }
     }
 
@@ -850,6 +863,35 @@ mod underline_color_tests {
                 "PDF should stay supported on {protocol:?}"
             );
         }
+    }
+
+    #[test]
+    fn sixel_margin_scroll_needs_wezterm_or_windows_terminal_outside_tmux() {
+        let margin_scroll = |env: TerminalEnv, protocol: GraphicsProtocol| {
+            let mut caps = detect_terminal_from_env(env);
+            caps.protocol = Some(protocol);
+            refresh_pdf_capabilities(&mut caps);
+            caps.pdf.sixel_margin_scroll
+        };
+        assert!(margin_scroll(
+            env_with_term_program("wezterm"),
+            GraphicsProtocol::Sixel
+        ));
+        let mut windows_terminal = env_with_term_program("");
+        windows_terminal.windows_terminal = true;
+        assert!(margin_scroll(windows_terminal, GraphicsProtocol::Sixel));
+
+        assert!(!margin_scroll(
+            env_with_term_program("kitty"),
+            GraphicsProtocol::Sixel
+        ));
+        assert!(!margin_scroll(
+            env_with_term_program("wezterm"),
+            GraphicsProtocol::Iterm2
+        ));
+        let mut in_tmux = env_with_term_program("wezterm");
+        in_tmux.tmux = true;
+        assert!(!margin_scroll(in_tmux, GraphicsProtocol::Sixel));
     }
 }
 

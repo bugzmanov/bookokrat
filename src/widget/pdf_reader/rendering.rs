@@ -8,10 +8,12 @@ use std::io::stdout;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use crate::vendored::ratatui_image::protocol::Protocol;
 use crate::vendored::ratatui_image::{FontSize, Image};
 use crossterm::{execute, terminal::BeginSynchronizedUpdate};
 use ratatui::{
     Frame,
+    buffer::{Buffer, Cell},
     layout::{Constraint, Flex, Layout, Position, Rect},
     prelude::{Line, Text},
     style::{Color, Modifier, Style},
@@ -199,6 +201,14 @@ fn send_cached_page_to_converter(
     }
 }
 
+/// Whether `page` is drawn by the non-Kitty view: the current page, plus its partner in
+/// dual layout.
+fn page_on_screen(pdf_reader: &PdfReaderState, page: usize) -> bool {
+    page == pdf_reader.page
+        || (pdf_reader.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual
+            && page == pdf_reader.page.saturating_add(1))
+}
+
 /// Result of apply_render_responses indicating what was updated
 pub(crate) struct RenderUpdateResult {
     /// Whether any updates happened (requiring redraw)
@@ -218,10 +228,16 @@ pub(crate) fn apply_render_responses(
     notifications: &mut NotificationManager,
     current_render_generation: u64,
 ) -> RenderUpdateResult {
-    let mut updated = !responses.is_empty();
+    let use_kitty = pdf_reader.is_kitty;
+    // Data for an off-screen page (prefetch, pre-encoded neighbours) does not change what the
+    // non-Kitty view draws, and every redraw there re-emits the visible image strips.
+    let mut updated = responses.iter().any(|response| {
+        use_kitty
+            || !matches!(response, RenderResponse::Page { page, .. }
+                if !page_on_screen(pdf_reader, *page))
+    });
     let mut converted_frame_page = None;
     let mut reloaded = false;
-    let use_kitty = pdf_reader.is_kitty;
     let scroll_anchor = pdf_reader.capture_kitty_scroll_anchor();
     let pan_fraction = if use_kitty {
         pdf_reader.capture_kitty_pan_fraction()
@@ -430,11 +446,14 @@ pub(crate) fn apply_render_responses(
                             pdf_reader.sync_kitty_display_zoom_to_rendered_scale(frame_index);
                         }
                     }
-                    pdf_reader.last_render.rect = Rect::default();
-                    updated = true;
-                    if !use_kitty {
-                        // Fresh converted frame can change dual strip intersections.
-                        pdf_reader.last_sent_viewport = None;
+                    let on_screen = page_on_screen(pdf_reader, frame_index);
+                    if use_kitty || on_screen {
+                        pdf_reader.last_render.rect = Rect::default();
+                        updated = true;
+                        if !use_kitty {
+                            // Fresh converted frame can change dual strip intersections.
+                            pdf_reader.last_sent_viewport = None;
+                        }
                     }
                     // Track the current page's frame arrival for waiting_for_page
                     // optimization. In dual layout the pair partner counts too:
@@ -442,10 +461,7 @@ pub(crate) fn apply_render_responses(
                     // slice, so only its frames arrive — gating on the left page
                     // alone would leave the redraw-suppression flag set forever
                     // (state advances, screen frozen).
-                    let dual_partner = pdf_reader.settings.load().pdf_page_layout_mode
-                        == PdfPageLayoutMode::Dual
-                        && frame_index == pdf_reader.page.saturating_add(1);
-                    if frame_index == pdf_reader.page || dual_partner {
+                    if on_screen {
                         converted_frame_page = Some(frame_index);
                     }
                 }
@@ -1473,6 +1489,221 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     }
 
     let _ = std::io::Write::flush(&mut stdout);
+}
+
+/// A Sixel strip placed into the frame: its cell area, the encoded strip, and the cells it
+/// wrote, kept to detect anything drawn over it later in the frame.
+pub(crate) struct PlacedStrip {
+    area: Rect,
+    protocol: Arc<Protocol>,
+    cells: Vec<Cell>,
+}
+
+impl PlacedStrip {
+    /// Captures a strip right after it was rendered. Returns `None` when nothing was written
+    /// (the strip did not fit its area).
+    fn capture(buf: &Buffer, area: Rect, protocol: &Arc<Protocol>) -> Option<Self> {
+        let area = area.intersection(buf.area);
+        let anchor = buf.cell(area.as_position())?;
+        if !matches!(protocol.as_ref(), Protocol::Sixel(_)) || !anchor.symbol().starts_with('\x1b')
+        {
+            return None;
+        }
+        let cells = area
+            .positions()
+            .filter_map(|position| buf.cell(position).cloned())
+            .collect();
+        Some(Self {
+            area,
+            protocol: Arc::clone(protocol),
+            cells,
+        })
+    }
+
+    fn untouched(&self, buf: &Buffer) -> bool {
+        self.area
+            .positions()
+            .zip(&self.cells)
+            .all(|(position, cell)| buf.cell(position) == Some(cell))
+    }
+
+    fn id(&self) -> usize {
+        Arc::as_ptr(&self.protocol) as usize
+    }
+}
+
+/// A terminal-side scroll of the Sixel strip rectangle (left/right + top/bottom margins).
+struct SixelScroll {
+    left: u16,
+    right: u16,
+    top: u16,
+    bottom: u16,
+    /// Rows the content moves up (negative: down).
+    delta: i32,
+}
+
+impl SixelScroll {
+    /// Finds the scroll that turns the strips on screen into `strips`, when both cover the
+    /// same single-row cells of one rectangle and the scroll saves writing strips.
+    fn find(on_screen: &HashSet<(Rect, usize)>, strips: &[PlacedStrip]) -> Option<Self> {
+        let first = strips.first()?.area;
+        let same_columns = |r: &Rect| r.height == 1 && r.x == first.x && r.width == first.width;
+        if !strips.iter().all(|s| same_columns(&s.area))
+            || !on_screen.iter().all(|(r, _)| same_columns(r))
+        {
+            return None;
+        }
+        let rows: HashSet<u16> = strips.iter().map(|s| s.area.y).collect();
+        let screen_rows: HashSet<u16> = on_screen.iter().map(|(r, _)| r.y).collect();
+        let top = *rows.iter().min()?;
+        let bottom = *rows.iter().max()?;
+        if rows != screen_rows || rows.len() != usize::from(bottom - top) + 1 {
+            return None;
+        }
+        let screen_row_of: HashMap<usize, u16> =
+            on_screen.iter().map(|(r, id)| (*id, r.y)).collect();
+        let delta = strips.iter().find_map(|s| {
+            let from = *screen_row_of.get(&s.id())?;
+            (from != s.area.y).then(|| i32::from(from) - i32::from(s.area.y))
+        })?;
+        let scroll = Self {
+            left: first.x,
+            right: first.right() - 1,
+            top,
+            bottom,
+            delta,
+        };
+        let missing = |screen: &HashSet<(Rect, usize)>| {
+            strips
+                .iter()
+                .filter(|s| !screen.contains(&(s.area, s.id())))
+                .count()
+        };
+        (missing(&scroll.shift(on_screen)) < missing(on_screen)).then_some(scroll)
+    }
+
+    fn shift(&self, on_screen: &HashSet<(Rect, usize)>) -> HashSet<(Rect, usize)> {
+        on_screen
+            .iter()
+            .filter_map(|(r, id)| {
+                let y = i32::from(r.y) - self.delta;
+                (y >= i32::from(self.top) && y <= i32::from(self.bottom))
+                    .then_some((Rect { y: y as u16, ..*r }, *id))
+            })
+            .collect()
+    }
+
+    fn emit(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        let _ = write!(
+            out,
+            "\x1b[?69h\x1b[{};{}s\x1b[{};{}r",
+            self.left + 1,
+            self.right + 1,
+            self.top + 1,
+            self.bottom + 1
+        );
+        if self.delta > 0 {
+            let _ = write!(out, "\x1b[{}S", self.delta);
+        } else {
+            let _ = write!(out, "\x1b[{}T", -self.delta);
+        }
+        out.push_str("\x1b[r\x1b[s\x1b[?69l");
+    }
+}
+
+impl PdfReaderState {
+    /// Emits this frame's Sixel strips directly instead of through the ratatui diff, which
+    /// re-sends every strip on each redraw. Only strips that differ from what is on screen are
+    /// written; when the page scrolled, the strip rectangle is first scrolled inside the
+    /// terminal so only the newly exposed rows need writing. Anything drawn over a strip makes
+    /// the frame fall back to the regular diff and forgets what is on screen.
+    pub(crate) fn flush_sixel_strips(&mut self, buf: &mut Buffer) {
+        use std::io::Write as _;
+
+        let strips = std::mem::take(&mut self.sixel_frame_strips);
+        let screen = self.sixel_screen.take();
+        if strips.is_empty() || !strips.iter().all(|strip| strip.untouched(buf)) {
+            return;
+        }
+        let mut on_screen: HashSet<(Rect, usize)> = match screen {
+            Some((area, tiles)) if area == buf.area => tiles.into_iter().collect(),
+            _ => HashSet::new(),
+        };
+
+        let mut out = String::new();
+        if self.sixel_margin_scroll {
+            if let Some(scroll) = SixelScroll::find(&on_screen, &strips) {
+                scroll.emit(&mut out);
+                on_screen = scroll.shift(&on_screen);
+            }
+        }
+        for strip in &strips {
+            if on_screen.contains(&(strip.area, strip.id())) {
+                continue;
+            }
+            if let Protocol::Sixel(sixel) = strip.protocol.as_ref() {
+                out.push_str(&format!(
+                    "\x1b[{};{}H",
+                    u32::from(strip.area.y) + 1,
+                    u32::from(strip.area.x) + 1
+                ));
+                out.push_str(&sixel.data);
+            }
+        }
+        if !out.is_empty() {
+            let mut stdout = stdout().lock();
+            let _ = stdout.write_all(out.as_bytes());
+            let _ = stdout.flush();
+        }
+
+        for strip in &strips {
+            for position in strip.area.positions() {
+                buf[position].set_symbol(" ").set_skip(true);
+            }
+        }
+        self.sixel_screen = Some((
+            buf.area,
+            strips
+                .iter()
+                .map(|strip| (strip.area, strip.id()))
+                .collect(),
+        ));
+    }
+
+    /// Forgets which Sixel strips are on screen, e.g. after the terminal was cleared.
+    pub(crate) fn invalidate_sixel_screen(&mut self) {
+        self.sixel_screen = None;
+    }
+}
+
+/// Splits `rects` into single-row spans that leave out every cell inside `covered`.
+fn subtract_covered_cells(rects: &[Rect], covered: &[Rect]) -> Vec<Rect> {
+    let mut out = Vec::new();
+    for rect in rects {
+        for y in rect.top()..rect.bottom() {
+            let mut spans: Vec<(u16, u16)> = covered
+                .iter()
+                .filter(|c| y >= c.top() && y < c.bottom())
+                .map(|c| (c.left(), c.right()))
+                .collect();
+            spans.sort_unstable();
+            let mut x = rect.left();
+            for (start, end) in spans {
+                if start > x {
+                    out.push(Rect::new(x, y, start.min(rect.right()) - x, 1));
+                }
+                x = x.max(end);
+                if x >= rect.right() {
+                    break;
+                }
+            }
+            if x < rect.right() {
+                out.push(Rect::new(x, y, rect.right() - x, 1));
+            }
+        }
+    }
+    out
 }
 
 /// iTerm2-protocol equivalent of the Kitty modal backing overlay, close-side.
@@ -3397,6 +3628,19 @@ impl PdfReaderState {
         }
 
         if page_sizes.is_empty() {
+            if needs_clear || terminal_overlay::overlay_force_clear_enabled() {
+                // Erase in the frame where the layout changed. Deferring it to the frame
+                // that brings the new image would wipe cells drawn meanwhile (e.g. the
+                // border over the old zen-mode area) that ratatui then never repaints.
+                let _ = execute!(stdout(), BeginSynchronizedUpdate);
+                terminal_overlay::clear_rects_direct_bg(
+                    self.nonkitty_cleanup_rects(img_area, inner_area),
+                    crate::color_mode::color_to_rgb(bg_color),
+                );
+                self.last_nonkitty_cleanup_area = Some(img_area);
+                self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
+                self.last_nonkitty_cleanup_page = Some(self.page);
+            }
             self.coord_info = Some((img_area, font_size));
             // Don't update last_render.rect here - keep it invalid so the next frame
             // with actual images will render. Otherwise, the cache check passes and
@@ -3473,38 +3717,21 @@ impl PdfReaderState {
             if terminal_overlay::kitty_delete_overlay_hack_enabled() && needs_clear {
                 terminal_overlay::emit_kitty_delete_all();
             }
+            let mut deferred_sixel_clear: Option<Vec<Rect>> = None;
+            let mut placed_strips: Vec<PlacedStrip> = Vec::new();
             if needs_clear || terminal_overlay::overlay_force_clear_enabled() {
-                // Inline images (iTerm2 protocol) survive in cells the ratatui
-                // diff considers unchanged: when the new image is smaller than
-                // the previous one, the vacated cells keep showing the OLD
-                // image's fragments (the "right-edge strip" leak). Direct-write
-                // spaces over both the previous and the current image area so
-                // stale fragments cannot outlive a zoom/area/page change. The
-                // theme bg keeps the flash invisible.
-                // Pad by a couple of cells: WezTerm rounds the scaled image up
-                // to whole cells, so fragments can sit one column/row past the
-                // declared area.
-                let pad_rect = |r: Rect| Rect {
-                    width: r
-                        .width
-                        .saturating_add(2)
-                        .min(size.width.saturating_sub(r.x)),
-                    height: r
-                        .height
-                        .saturating_add(1)
-                        .min(size.height.saturating_sub(r.y)),
-                    ..r
-                };
-                let mut rects = vec![pad_rect(img_area)];
-                if let Some(prev) = self.last_nonkitty_cleanup_area {
-                    if prev != img_area {
-                        rects.push(pad_rect(prev));
-                    }
+                let rects = self.nonkitty_cleanup_rects(img_area, inner_area);
+                if self.uses_sixel_protocol {
+                    // The erase bypasses ratatui, so a strip identical to the one already on
+                    // screen would never be re-sent and its row would stay blank. Defer the
+                    // erase until the strips are placed and skip the cells they cover.
+                    deferred_sixel_clear = Some(rects);
+                } else {
+                    terminal_overlay::clear_rects_direct_bg(
+                        rects,
+                        crate::color_mode::color_to_rgb(bg_color),
+                    );
                 }
-                terminal_overlay::clear_rects_direct_bg(
-                    rects,
-                    crate::color_mode::color_to_rgb(bg_color),
-                );
             }
             self.last_nonkitty_cleanup_area = Some(img_area);
             self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
@@ -3643,6 +3870,7 @@ impl PdfReaderState {
                             },
                             None,
                             bg_color,
+                            &mut placed_strips,
                         );
                         if let Some((img, pos)) = maybe_img {
                             to_display.push(ImageRequest {
@@ -3662,6 +3890,7 @@ impl PdfReaderState {
                         Rect { width, ..img_area },
                         None,
                         bg_color,
+                        &mut placed_strips,
                     );
                     img_area.x += width.saturating_add(DUAL_PAGE_GAP_CELLS);
                     if let Some((img, pos)) = maybe_img {
@@ -3673,6 +3902,17 @@ impl PdfReaderState {
                         });
                     }
                 }
+            }
+
+            if let Some(rects) = deferred_sixel_clear {
+                let covered: Vec<Rect> = placed_strips.iter().map(|strip| strip.area).collect();
+                terminal_overlay::clear_rects_direct_bg(
+                    subtract_covered_cells(&rects, &covered),
+                    crate::color_mode::color_to_rgb(bg_color),
+                );
+            }
+            if self.uses_sixel_protocol {
+                self.sixel_frame_strips = placed_strips;
             }
 
             self.last_render.rect = size;
@@ -3786,12 +4026,57 @@ impl PdfReaderState {
         }
     }
 
+    /// Areas to direct-erase when the non-Kitty image area, zoom or page changes.
+    ///
+    /// Inline images (iTerm2 protocol) survive in cells the ratatui diff considers unchanged:
+    /// when the new image is smaller than the previous one, the vacated cells keep showing the
+    /// OLD image's fragments (the "right-edge strip" leak). Erasing both the previous and the
+    /// current image area keeps stale fragments from outliving a zoom/area/page change. The
+    /// theme bg keeps the flash invisible.
+    ///
+    /// For iTerm2 the areas are padded by a couple of cells: WezTerm rounds the scaled image up
+    /// to whole cells, so fragments can sit one column/row past the declared area. Sixel strips
+    /// are cell-exact, and padding would erase borders that ratatui does not repaint.
+    /// The padding only grows into `content` (the page area): beyond it are borders and labels
+    /// that ratatui never repaints after this direct erase.
+    fn nonkitty_cleanup_rects(&self, img_area: Rect, content: Rect) -> Vec<Rect> {
+        let pad = !self.uses_sixel_protocol;
+        let pad_rect = |r: Rect| {
+            if !pad {
+                return r;
+            }
+            Rect {
+                width: r.width.max(
+                    r.right()
+                        .saturating_add(2)
+                        .min(content.right())
+                        .saturating_sub(r.x),
+                ),
+                height: r.height.max(
+                    r.bottom()
+                        .saturating_add(1)
+                        .min(content.bottom())
+                        .saturating_sub(r.y),
+                ),
+                ..r
+            }
+        };
+        let mut rects = vec![pad_rect(img_area)];
+        if let Some(prev) = self.last_nonkitty_cleanup_area {
+            if prev != img_area {
+                rects.push(pad_rect(prev));
+            }
+        }
+        rects
+    }
+
     fn render_single_page<'img>(
         frame: &mut Frame<'_>,
         page_img: &'img mut ConvertedImage,
         img_area: Rect,
         scroll_plan: Option<PendingScroll>,
         bg_color: Color,
+        placed: &mut Vec<PlacedStrip>,
     ) -> Option<(&'img mut ImageState, Position)> {
         match page_img {
             ConvertedImage::Generic(page_img) => {
@@ -3834,6 +4119,11 @@ impl PdfReaderState {
                                         height: tile.height_cells,
                                     };
                                     frame.render_widget(Image::new(&tile.protocol), tile_area);
+                                    placed.extend(PlacedStrip::capture(
+                                        frame.buffer_mut(),
+                                        tile_area,
+                                        &tile.protocol,
+                                    ));
                                 }
                             }
                             return None;
@@ -3866,6 +4156,11 @@ impl PdfReaderState {
                                         height: tile.height_cells,
                                     };
                                     frame.render_widget(Image::new(&tile.protocol), tile_area);
+                                    placed.extend(PlacedStrip::capture(
+                                        frame.buffer_mut(),
+                                        tile_area,
+                                        &tile.protocol,
+                                    ));
                                 }
                             }
                             return None;
@@ -3880,6 +4175,11 @@ impl PdfReaderState {
                         height: tile.height_cells,
                     };
                     frame.render_widget(Image::new(&tile.protocol), tile_area);
+                    placed.extend(PlacedStrip::capture(
+                        frame.buffer_mut(),
+                        tile_area,
+                        &tile.protocol,
+                    ));
                 }
                 None
             }

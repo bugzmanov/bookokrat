@@ -7,89 +7,31 @@
 //! [Sixel]: https://en.wikipedia.org/wiki/Sixel
 use std::cmp::min;
 
-use icy_sixel::{
-    DiffusionMethod, MethodForLargest, MethodForRep, PixelFormat, Quality, sixel_string,
-};
+use icy_sixel::{EncodeOptions, QuantizeMethod, sixel_encode};
 use image::DynamicImage;
 use ratatui::{buffer::Buffer, layout::Rect};
 
 use super::{ProtocolTrait, StatefulProtocolTrait};
 use crate::vendored::ratatui_image::{Result, errors::Errors, picker::cap_parser::Parser};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SixelOptions {
-    pub diffusion: DiffusionMethod,
-    pub largest: MethodForLargest,
-    pub rep: MethodForRep,
-    pub quality: Quality,
-}
-
-impl std::fmt::Debug for SixelOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SixelOptions")
-            .field("diffusion", &format_diffusion(self.diffusion))
-            .field("largest", &format_largest(self.largest))
-            .field("rep", &format_rep(self.rep))
-            .field("quality", &format_quality(self.quality))
-            .finish()
-    }
-}
-
-fn format_diffusion(value: DiffusionMethod) -> &'static str {
-    match value {
-        DiffusionMethod::Auto => "Auto",
-        DiffusionMethod::None => "None",
-        DiffusionMethod::Atkinson => "Atkinson",
-        DiffusionMethod::FS => "FS",
-        DiffusionMethod::JaJuNi => "JaJuNi",
-        DiffusionMethod::Stucki => "Stucki",
-        DiffusionMethod::Burkes => "Burkes",
-        DiffusionMethod::ADither => "ADither",
-        DiffusionMethod::XDither => "XDither",
-    }
-}
-
-fn format_largest(value: MethodForLargest) -> &'static str {
-    match value {
-        MethodForLargest::Auto => "Auto",
-        MethodForLargest::Norm => "Norm",
-        MethodForLargest::Lum => "Lum",
-    }
-}
-
-fn format_rep(value: MethodForRep) -> &'static str {
-    match value {
-        MethodForRep::Auto => "Auto",
-        MethodForRep::CenterBox => "CenterBox",
-        MethodForRep::AverageColors => "AverageColors",
-        MethodForRep::Pixels => "Pixels",
-    }
-}
-
-fn format_quality(value: Quality) -> &'static str {
-    match value {
-        Quality::AUTO => "AUTO",
-        Quality::HIGH => "HIGH",
-        Quality::LOW => "LOW",
-        Quality::FULL => "FULL",
-        Quality::HIGHCOLOR => "HIGHCOLOR",
-    }
+    /// Palette size (2-256).
+    pub max_colors: u16,
+    /// Floyd-Steinberg error diffusion strength (0.0 disables dithering).
+    pub diffusion: f32,
 }
 
 impl SixelOptions {
     pub const DEFAULT: SixelOptions = SixelOptions {
-        diffusion: DiffusionMethod::Stucki,
-        largest: MethodForLargest::Auto,
-        rep: MethodForRep::Auto,
-        quality: Quality::HIGH,
+        max_colors: 256,
+        diffusion: 0.875,
     };
 
     pub fn low_quality() -> Self {
         Self {
-            diffusion: DiffusionMethod::None,
-            largest: MethodForLargest::Auto,
-            rep: MethodForRep::Auto,
-            quality: Quality::LOW,
+            max_colors: 64,
+            diffusion: 0.0,
         }
     }
 }
@@ -127,32 +69,20 @@ impl Sixel {
 }
 
 fn encode(img: &DynamicImage, is_tmux: bool, options: SixelOptions) -> Result<String> {
-    let mut img = img.to_rgb8();
-    let w = img.width();
-    let h = img.height();
-    let rounded_h = h.div_ceil(6) * 6;
-    if rounded_h != h {
-        let bg = *img.get_pixel(0, 0);
-        let mut padded = image::ImageBuffer::from_pixel(w, rounded_h, bg);
-        image::imageops::overlay(&mut padded, &img, 0, 0);
-        img = padded;
-    }
-    let img_rgb8 = img;
-    let bytes = img_rgb8.as_raw();
-    let w = img_rgb8.width();
-    let h = img_rgb8.height();
+    // No padding to a multiple of 6: the raster attributes carry the exact height, and a taller
+    // image would spill into the next row (scrolling the screen when drawn on the last row).
+    let img_rgba8 = DynamicImage::ImageRgb8(img.to_rgb8()).into_rgba8();
+    let bytes = img_rgba8.as_raw();
+    let w = img_rgba8.width();
+    let h = img_rgba8.height();
 
-    let mut data = sixel_string(
-        bytes,
-        w as i32,
-        h as i32,
-        PixelFormat::RGB888,
-        options.diffusion,
-        options.largest,
-        options.rep,
-        options.quality,
-    )
-    .map_err(|err| Errors::Sixel(err.to_string()))?;
+    let encode_options = EncodeOptions {
+        max_colors: options.max_colors,
+        diffusion: options.diffusion,
+        quantize_method: QuantizeMethod::Wu,
+    };
+    let mut data = sixel_encode(bytes, w as usize, h as usize, &encode_options)
+        .map_err(|err| Errors::Sixel(err.to_string()))?;
 
     if is_tmux {
         let (start, escape, end) = Parser::escape_tmux(is_tmux);
@@ -202,7 +132,15 @@ fn render(rect: Rect, data: &str, area: Rect, buf: &mut Buffer, overdraw: bool) 
         Some(r) => r,
     };
 
-    buf[(render_area.x, render_area.y)].set_symbol(data);
+    // WezTerm places a sixel before flushing printable text that immediately precedes it, so a
+    // character emitted right before this cell would shift the image one cell left. An explicit
+    // cursor position flushes that text and pins the image to its cell on every terminal.
+    let positioned = format!(
+        "\x1b[{};{}H{data}",
+        u32::from(render_area.y) + 1,
+        u32::from(render_area.x) + 1
+    );
+    buf[(render_area.x, render_area.y)].set_symbol(&positioned);
     let mut skip_first = false;
 
     // Skip entire area
