@@ -2,7 +2,7 @@
 name = "bookokrat"
 version = "0.3.13"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.90"
 authors = ["Rafael Bagmanov <bugzmanov@gmail.com>"]
 license = "AGPL-3.0-or-later"
 description = "A terminal-based EPUB/PDF Books reader"
@@ -84,7 +84,7 @@ unicode-width = "0.2.0"
 vt100 = "0.15"
 codepage-437 = "0.1.0"
 # Vendored ratatui-image dependencies
-icy_sixel = "0.1.1"
+icy_sixel = "0.5.1"
 base64-simd = "0.8"
 rand = "0.8.5"
 thiserror = "1.0.59"
@@ -95,7 +95,7 @@ walkdir = "2.4"
 # PDF rendering dependencies (optional, enabled with `pdf` feature)
 mupdf = { version = "0.6.0", default-features = false, features = ["svg", "system-fonts", "img"], optional = true }
 flume = { version = "0.12.0", default-features = false, optional = true }
-wide = { version = "0.7", optional = true }
+wide = { version = "1.7", optional = true }
 lru = { version = "0.12", optional = true }
 rayon = { version = "1.11.0", default-features = false, optional = true }
 base64 = { version = "0.22", optional = true }

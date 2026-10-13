@@ -1640,6 +1640,7 @@ impl App {
             runtime_settings.pdf_render_mode
         );
         let uses_iterm2_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Iterm2);
+        let uses_sixel_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Sixel);
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
             is_kitty,
@@ -1657,6 +1658,8 @@ impl App {
             self.settings.clone(),
         );
         pdf_reader.uses_iterm2_protocol = uses_iterm2_protocol;
+        pdf_reader.uses_sixel_protocol = uses_sixel_protocol;
+        pdf_reader.sixel_margin_scroll = caps.pdf.sixel_margin_scroll;
         if use_kitty
             && initial_page > 0
             && runtime_settings.pdf_render_mode == crate::settings::PdfRenderMode::Scroll
@@ -4166,6 +4169,10 @@ impl App {
         let draw_closure_start = std::time::Instant::now();
         #[cfg(feature = "pdf")]
         let mut pdf_area = None;
+        #[cfg(feature = "pdf")]
+        if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+            pdf_reader.sixel_frame_strips.clear();
+        }
         let auto_scroll_updated = self.text_reader.update_auto_scroll();
         if auto_scroll_updated {
             self.save_bookmark();
@@ -4448,12 +4455,25 @@ impl App {
                 lookup_popup.render(f, f.area());
             }
         }
+        // Last, so it sees everything drawn over the page this frame.
+        #[cfg(feature = "pdf")]
+        if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+            pdf_reader.flush_sixel_strips(f.buffer_mut());
+        }
         let draw_closure_elapsed = draw_closure_start.elapsed();
         if draw_closure_elapsed.as_millis() > 5 {
             log::debug!(
                 "draw() render closure took {}ms",
                 draw_closure_elapsed.as_millis()
             );
+        }
+    }
+
+    /// The terminal was cleared, so Sixel strips previously drawn are gone.
+    fn invalidate_sixel_screen(&mut self) {
+        #[cfg(feature = "pdf")]
+        if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+            pdf_reader.invalidate_sixel_screen();
         }
     }
 
@@ -7398,11 +7418,15 @@ impl App {
             render_gen,
         );
 
-        // Clear waiting flags when a frame arrives
+        // Clear waiting flags when a frame for a page on screen arrives. Only the last such
+        // frame of the poll is reported; in dual layout both pages' frames usually land in the
+        // same poll, so it can be the pair partner rather than the awaited left page, and an
+        // exact match would leave redraws suppressed forever.
         if let Some(frame_page) = result.converted_frame_page {
-            if self.pdf_waiting_for_page == Some(frame_page) {
-                log::trace!("Clearing pdf_waiting_for_page: page {frame_page} frame arrived");
-                self.pdf_waiting_for_page = None;
+            if let Some(waiting) = self.pdf_waiting_for_page.take() {
+                log::trace!(
+                    "Clearing pdf_waiting_for_page {waiting}: page {frame_page} frame arrived"
+                );
             }
             // Clear viewport waiting - any frame arrival means converter is responding
             if self.pdf_waiting_for_viewport {
@@ -8569,6 +8593,7 @@ where
                 app.re_enqueue_pdf_images();
             }
             terminal.clear()?;
+            app.invalidate_sixel_screen();
             needs_redraw = true;
         }
 
@@ -8582,6 +8607,7 @@ where
         if app.pending_screen_refresh {
             app.pending_screen_refresh = false;
             terminal.clear()?;
+            app.invalidate_sixel_screen();
             needs_redraw = true;
         }
 
@@ -8628,6 +8654,7 @@ where
             }
             crossterm::terminal::enable_raw_mode()?;
             terminal.clear()?;
+            app.invalidate_sixel_screen();
             #[cfg(feature = "pdf")]
             app.re_enqueue_pdf_images();
             needs_redraw = true;

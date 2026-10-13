@@ -395,6 +395,16 @@ pub struct PdfReaderState {
     /// (WezTerm, Warp, Konsole, actual iTerm). Unlike `is_iterm`, which is
     /// only true for the real iTerm app.
     pub uses_iterm2_protocol: bool,
+    /// True when pages are displayed via the Sixel graphics protocol.
+    pub uses_sixel_protocol: bool,
+    /// True when the terminal can scroll a rectangle (DECLRMM/DECSLRM), letting Sixel
+    /// scrolling move the strips already on screen instead of re-sending all of them.
+    pub sixel_margin_scroll: bool,
+    /// Sixel strips placed into the frame being drawn.
+    pub(crate) sixel_frame_strips: Vec<crate::widget::pdf_reader::rendering::PlacedStrip>,
+    /// Sixel strips known to be on screen, as (cell area, strip identity), plus the frame
+    /// area they were drawn in. `None` whenever the screen may differ from that record.
+    pub(crate) sixel_screen: Option<(Rect, Vec<(Rect, usize)>)>,
     /// Last overlay rect that was actually transmitted to Kitty, used to avoid
     /// redundant delete+retransmit cycles that cause blinking.
     pub modal_overlay_sent: Option<(u16, u16, u16, u16)>,
@@ -521,6 +531,10 @@ impl PdfReaderState {
             modal_overlay_rect: None,
             pending_screen_refresh: false,
             uses_iterm2_protocol: false,
+            uses_sixel_protocol: false,
+            sixel_margin_scroll: false,
+            sixel_frame_strips: Vec::new(),
+            sixel_screen: None,
             modal_overlay_sent: None,
             comment_rects: Vec::new(),
             highlight_overlays: Vec::new(),

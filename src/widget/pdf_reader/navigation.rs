@@ -6675,6 +6675,11 @@ impl PdfReaderState {
                 if !self.is_kitty {
                     self.force_redraw();
                 }
+                // Visual motions move the cursor too; without this the converter keeps
+                // drawing it where visual mode started.
+                send_conversion(crate::pdf::ConversionCommand::UpdateCursor(
+                    self.get_cursor_rect(),
+                ));
                 send_conversion(crate::pdf::ConversionCommand::UpdateVisual(rects));
                 if let Some(viewport) = viewport {
                     if let Some(cmd) = self.viewport_command(viewport) {

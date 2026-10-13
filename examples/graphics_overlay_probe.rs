@@ -9,9 +9,7 @@ use crossterm::{
     execute,
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use icy_sixel::{
-    DiffusionMethod, MethodForLargest, MethodForRep, PixelFormat, Quality, sixel_string,
-};
+use icy_sixel::{EncodeOptions, sixel_encode};
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,16 +143,12 @@ fn iterm_payload(img: &DynamicImage, w_cells: u16, h_cells: u16) -> String {
 }
 
 fn sixel_payload(img: &DynamicImage) -> String {
-    let rgb = img.to_rgb8();
-    sixel_string(
-        rgb.as_raw(),
-        rgb.width() as i32,
-        rgb.height() as i32,
-        PixelFormat::RGB888,
-        DiffusionMethod::Stucki,
-        MethodForLargest::Auto,
-        MethodForRep::Auto,
-        Quality::HIGH,
+    let rgba = DynamicImage::ImageRgb8(img.to_rgb8()).into_rgba8();
+    sixel_encode(
+        rgba.as_raw(),
+        rgba.width() as usize,
+        rgba.height() as usize,
+        &EncodeOptions::default(),
     )
     .unwrap_or_default()
 }

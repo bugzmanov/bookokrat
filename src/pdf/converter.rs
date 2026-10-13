@@ -34,6 +34,10 @@ use super::types::{
 
 type PipelineError = super::request::WorkerFault;
 
+/// Neighbour pages pre-encoded in Sixel mode. Matches the radius at which
+/// `clear_distant_pixels` evicts page data, so nothing outside it can be encoded anyway.
+const SIXEL_PREENCODE_RADIUS: usize = 5;
+
 fn pipeline_error(msg: impl Into<String>) -> PipelineError {
     PipelineError::generic(msg)
 }
@@ -441,6 +445,8 @@ struct ConverterEngine {
     sent_for_viewport: HashSet<usize>,
     /// Pages that need cursor re-rendering once they arrive in cache.
     pending_cursor_pages: HashSet<usize>,
+    /// True while the main thread drives the converter with dual-page viewports.
+    dual_viewports: bool,
 }
 
 #[derive(Clone)]
@@ -579,6 +585,7 @@ impl ConverterEngine {
             tiled_pages: HashSet::new(),
             sent_for_viewport: HashSet::new(),
             pending_cursor_pages: HashSet::new(),
+            dual_viewports: false,
         }
     }
 
@@ -616,6 +623,9 @@ impl ConverterEngine {
                 // so UpdateViewport can render from cache later. Don't re-enqueue in
                 // images — that would block pick_candidate from reaching other pages.
                 *iteration = new_iter;
+                if let Some(frame) = self.preencode_sixel_page(page_num)? {
+                    return Ok(Some(frame));
+                }
                 continue;
             }
 
@@ -639,6 +649,48 @@ impl ConverterEngine {
                 image: img,
             }));
         }
+    }
+
+    /// Sixel encoding is too slow to run on the keypress, so neighbour pages are encoded
+    /// ahead for the viewport a page flip lands on (top of page, same pan and size) and
+    /// sent to the main thread. If the flip's actual viewport matches, the frame is shown
+    /// as-is; otherwise the regular viewport update re-renders it.
+    fn preencode_sixel_page(
+        &mut self,
+        page_num: usize,
+    ) -> Result<Option<RenderedFrame>, PipelineError> {
+        if self.picker.protocol_type() != ProtocolType::Sixel
+            || self.dual_viewports
+            || page_num == self.page
+            || page_num.abs_diff(self.page) > SIXEL_PREENCODE_RADIUS
+            || self.sent_for_viewport.contains(&page_num)
+            || self.last_viewport_by_page.contains_key(&page_num)
+        {
+            return Ok(None);
+        }
+        let Some(current) = self.viewport else {
+            return Ok(None);
+        };
+        let predicted = ViewportUpdate {
+            page: page_num,
+            y_offset_cells: 0,
+            ..current
+        };
+        let overlays = self.build_overlay_set(page_num);
+        let Some(Some(cached)) = self.page_cache.get_mut(page_num) else {
+            return Ok(None);
+        };
+        let image = render_viewport_tiles(cached, &predicted, &overlays, &self.picker)?;
+        let frame = RenderedFrame {
+            index: page_num,
+            requested_scale: cached.data.requested_scale,
+            achieved_scale: cached.data.achieved_scale,
+            image,
+        };
+        self.last_viewport_by_page.insert(page_num, predicted);
+        self.tiled_pages.insert(page_num);
+        self.sent_for_viewport.insert(page_num);
+        Ok(Some(frame))
     }
 
     fn pick_candidate(
@@ -774,6 +826,7 @@ impl ConverterEngine {
                         new_viewport.viewport_width_cells
                     );
                 }
+                self.dual_viewports = false;
                 self.handle_single_viewport_update(new_viewport, sender)?;
             }
             ConversionCommand::UpdateDualViewport(viewports) => {
@@ -797,6 +850,7 @@ impl ConverterEngine {
                             .collect::<Vec<_>>()
                     );
                 }
+                self.dual_viewports = true;
                 for viewport in viewports {
                     self.handle_single_viewport_update(viewport, sender)?;
                 }
@@ -926,10 +980,6 @@ impl ConverterEngine {
         affected: &HashSet<usize>,
         sender: &Sender<Result<RenderedFrame, PipelineError>>,
     ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        // For tile-based protocols (non-Kitty), use tile rendering to ensure
-        // overlays are correctly applied per-tile
-        let use_tiles = self.picker.protocol_type() != ProtocolType::Kitty;
-
         for page_num in affected {
             // Remove from sent set so the page will be re-rendered with new overlays
             self.sent_for_viewport.remove(page_num);
@@ -947,62 +997,62 @@ impl ConverterEngine {
             }
 
             let overlays = self.build_overlay_set(*page_num);
+            self.rerender_page(*page_num, &overlays, sender)?;
+        }
+        Ok(())
+    }
 
-            if use_tiles {
-                // Use tile rendering for non-Kitty protocols
-                if let Some(viewport) = self.viewport {
-                    if viewport.page == *page_num {
-                        if let Some(Some(cached)) = self.page_cache.get_mut(*page_num) {
-                            match render_viewport_tiles(cached, &viewport, &overlays, &self.picker)
-                            {
-                                Ok(img) => {
-                                    self.tiled_pages.insert(*page_num);
-                                    self.sent_for_viewport.insert(*page_num);
-                                    sender.send(Ok(RenderedFrame {
-                                        index: *page_num,
-                                        requested_scale: cached.data.requested_scale,
-                                        achieved_scale: cached.data.achieved_scale,
-                                        image: img,
-                                    }))?;
-                                }
-                                Err(e) => {
-                                    sender.send(Err(e))?;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                }
+    /// Re-renders `page_num` with `overlays` and sends the frame. Non-Kitty protocols render
+    /// tiles for the page's own viewport: in dual layout each page has its own, and the last
+    /// viewport handled belongs to the other page. A page without a viewport is not displayed
+    /// and gets rendered with its overlays once its viewport arrives.
+    fn rerender_page(
+        &mut self,
+        page_num: usize,
+        overlays: &OverlaySet,
+        sender: &Sender<Result<RenderedFrame, PipelineError>>,
+    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
+        let use_tiles = self.picker.protocol_type() != ProtocolType::Kitty;
+        let page_viewport = self
+            .last_viewport_by_page
+            .get(&page_num)
+            .copied()
+            .or_else(|| self.viewport.filter(|vp| vp.page == page_num));
+        if use_tiles && page_viewport.is_none() {
+            return Ok(());
+        }
+        let Some(Some(cached)) = self.page_cache.get_mut(page_num) else {
+            return Ok(());
+        };
+        let result = match page_viewport {
+            Some(viewport) if use_tiles => {
+                render_viewport_tiles(cached, &viewport, overlays, &self.picker)
             }
-
-            // Fall back to full page rendering (for Kitty or when viewport doesn't match)
-            let Some(Some(cached)) = self.page_cache.get(*page_num) else {
-                continue;
-            };
-            match render_page_with_viewport(
+            _ => render_page_with_viewport(
                 cached,
-                *page_num,
-                &overlays,
+                page_num,
+                overlays,
                 &self.picker,
                 self.viewport.as_ref(),
                 self.pid,
                 self.kitty_shm_support,
-            ) {
-                Ok(img) => {
-                    self.sent_for_viewport.insert(*page_num);
-                    sender.send(Ok(RenderedFrame {
-                        index: *page_num,
-                        requested_scale: cached.data.requested_scale,
-                        achieved_scale: cached.data.achieved_scale,
-                        image: img,
-                    }))?;
+            ),
+        };
+        match result {
+            Ok(image) => {
+                if use_tiles {
+                    self.tiled_pages.insert(page_num);
                 }
-                Err(e) => {
-                    sender.send(Err(e))?;
-                }
+                self.sent_for_viewport.insert(page_num);
+                sender.send(Ok(RenderedFrame {
+                    index: page_num,
+                    requested_scale: cached.data.requested_scale,
+                    achieved_scale: cached.data.achieved_scale,
+                    image,
+                }))
             }
+            Err(e) => sender.send(Err(e)),
         }
-        Ok(())
     }
 
     fn reconvert_changed_visual(
@@ -1046,28 +1096,7 @@ impl ConverterEngine {
             }
 
             let overlays = self.build_overlay_set(page_num);
-            match render_page_with_viewport(
-                cached,
-                page_num,
-                &overlays,
-                &self.picker,
-                self.viewport.as_ref(),
-                self.pid,
-                self.kitty_shm_support,
-            ) {
-                Ok(img) => {
-                    self.sent_for_viewport.insert(page_num);
-                    sender.send(Ok(RenderedFrame {
-                        index: page_num,
-                        requested_scale: cached.data.requested_scale,
-                        achieved_scale: cached.data.achieved_scale,
-                        image: img,
-                    }))?;
-                }
-                Err(e) => {
-                    sender.send(Err(e))?;
-                }
-            }
+            self.rerender_page(page_num, &overlays, sender)?;
         }
         Ok(())
     }
@@ -1248,29 +1277,7 @@ impl ConverterEngine {
             // Successfully rendering - remove from pending
             self.pending_cursor_pages.remove(&page_num);
             let overlays = self.build_overlay_set_with_cursor(page_num, new_cursor);
-            match render_page_with_viewport(
-                cached,
-                page_num,
-                &overlays,
-                &self.picker,
-                self.viewport.as_ref(),
-                self.pid,
-                self.kitty_shm_support,
-            ) {
-                Ok(img) => {
-                    self.sent_for_viewport.insert(page_num);
-                    sender.send(Ok(RenderedFrame {
-                        index: page_num,
-                        requested_scale: cached.data.requested_scale,
-                        achieved_scale: cached.data.achieved_scale,
-                        image: img,
-                    }))?;
-                }
-                Err(e) => {
-                    log::warn!("render_cursor_full_pages: failed to render page {page_num}: {e:?}");
-                    sender.send(Err(e))?;
-                }
-            }
+            self.rerender_page(page_num, &overlays, sender)?;
         }
 
         Ok(())
@@ -2542,9 +2549,9 @@ mod simd_overlay {
                 }
             }
 
-            c0.copy_from_slice(v0.as_array_ref());
-            c1.copy_from_slice(v1.as_array_ref());
-            c2.copy_from_slice(v2.as_array_ref());
+            c0.copy_from_slice(v0.as_array());
+            c1.copy_from_slice(v1.as_array());
+            c2.copy_from_slice(v2.as_array());
         }
 
         for px in remainder.chunks_exact_mut(3) {

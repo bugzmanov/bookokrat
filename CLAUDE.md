@@ -789,7 +789,7 @@ The application vendors the ratatui-image library for customization:
 
 **Version:** 0.3.0
 **Edition:** Rust 2024
-**Rust Version:** 1.86
+**Rust Version:** 1.90
 
 **Core UI & Terminal:**
 - `ratatui` (0.30.0): Terminal UI framework (with underline-color feature)
@@ -805,7 +805,7 @@ The application vendors the ratatui-image library for customization:
 - `tokio` (1.37.0): Async runtime (rt, macros features)
 - `futures-util` (0.3.30): Async utilities
 - `flume` (0.11.0): Async channels for worker communication
-- `wide` (0.7): SIMD operations
+- `wide` (1.7): SIMD operations
 - `lru` (0.12): LRU cache for page caching
 - `rayon` (1): Parallel processing
 - `memmap2` (0): Memory-mapped file access
@@ -828,7 +828,6 @@ The application vendors the ratatui-image library for customization:
 - `chrono` (0.4): Timestamp handling with serde support
 - `once_cell` (1.19): Lazy static initialization
 - `dirs` (5.0): Configuration directory paths
-- `home` (0.5.11): Home directory (pinned for Rust 1.86)
 
 **Error Handling & Logging:**
 - `anyhow` (1.0.79): Error handling
@@ -853,7 +852,7 @@ The application vendors the ratatui-image library for customization:
 - `png` (0.17): PNG encoding
 
 **Image Protocols (Vendored Dependencies):**
-- `icy_sixel` (0.1.1): Sixel protocol support
+- `icy_sixel` (0.5.1): Sixel protocol support
 - `base64-simd` (0.8): Fast base64 encoding
 - `rand` (0.8.5): Random utilities
 - `flate2` (1.0): Compression for Sixel
@@ -1620,7 +1619,7 @@ The test harness automatically launches and manages its own Kitty instance with 
 - **UI components are in `src/components/` and `src/widget/`**
 - **Parsing logic is in `src/parsing/`**
 - **Image handling is in `src/images/`**
-- **Rust edition 2024, version 1.86 is used**
+- **Rust edition 2024, version 1.90 is used**
 
 ## Performance Considerations
 - **CRITICAL**: Performance is one of the most important aspects of this project
