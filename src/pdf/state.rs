@@ -162,8 +162,15 @@ impl RenderState {
             cell_size: self.cell_size,
             black: self.black,
             white: self.white,
-            transparent: self.transparent,
+            // Alpha only makes sense while the page is tinted to the theme. In
+            // original rendering the paper must stay opaque white, otherwise
+            // black text lands straight on the terminal background (#206).
+            transparent: self.transparent && self.themed_rendering(),
         }
+    }
+
+    fn themed_rendering(&self) -> bool {
+        self.black >= 0 && self.white >= 0
     }
 }
 
@@ -289,6 +296,32 @@ mod tests {
             effects,
             vec![Effect::RenderCurrentPage, Effect::UpdatePrefetch]
         );
+    }
+
+    #[test]
+    fn transparent_only_applies_to_themed_rendering() {
+        let rerender = vec![
+            Effect::InvalidateCache,
+            Effect::RenderCurrentPage,
+            Effect::UpdatePrefetch,
+        ];
+        let mut state = test_state();
+        assert_eq!(state.apply(Command::SetTransparent(true)), rerender);
+        assert!(state.render_params().transparent);
+
+        let original = Command::SetColors {
+            black: -1,
+            white: -1,
+        };
+        assert_eq!(state.apply(original), rerender);
+        assert!(!state.render_params().transparent);
+
+        let themed = Command::SetColors {
+            black: 0,
+            white: 0xFFFFFF,
+        };
+        assert_eq!(state.apply(themed), rerender);
+        assert!(state.render_params().transparent);
     }
 
     #[test]
