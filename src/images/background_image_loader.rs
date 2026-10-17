@@ -87,19 +87,19 @@ impl BackgroundImageLoader {
     /// Check for loaded images from background thread
     /// Returns Some(images) if images were loaded, None if no images available
     pub fn check_for_loaded_images(&mut self) -> Option<HashMap<String, DynamicImage>> {
-        if let Some(ref receiver) = self.receiver {
-            if let Ok(message) = receiver.try_recv() {
-                debug!(
-                    "Received {} loaded images from background thread",
-                    message.images.len()
-                );
+        if let Some(ref receiver) = self.receiver
+            && let Ok(message) = receiver.try_recv()
+        {
+            debug!(
+                "Received {} loaded images from background thread",
+                message.images.len()
+            );
 
-                // Mark loading as complete
-                self.loading_in_progress = false;
-                self.receiver = None;
+            // Mark loading as complete
+            self.loading_in_progress = false;
+            self.receiver = None;
 
-                return Some(message.images);
-            }
+            return Some(message.images);
         }
         None
     }

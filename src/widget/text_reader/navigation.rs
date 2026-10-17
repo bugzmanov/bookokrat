@@ -487,11 +487,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Check for expired yank highlight
-        if let Some(ref highlight) = self.normal_mode.yank_highlight {
-            if highlight.is_expired() {
-                self.normal_mode.yank_highlight = None;
-                changed = true;
-            }
+        if let Some(ref highlight) = self.normal_mode.yank_highlight
+            && highlight.is_expired()
+        {
+            self.normal_mode.yank_highlight = None;
+            changed = true;
         }
 
         changed
@@ -558,27 +558,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let mut latest_heading_anchor: Option<String> = None;
 
         for line_idx in visible_start..viewport_mid {
-            if let Some(line) = self.rendered_content.lines.get(line_idx) {
-                if matches!(line.line_type, LineType::Heading { .. }) {
-                    if let Some(anchor) = line.node_anchor.clone() {
-                        latest_heading_anchor = Some(anchor);
-                    }
-                }
+            if let Some(line) = self.rendered_content.lines.get(line_idx)
+                && matches!(line.line_type, LineType::Heading { .. })
+                && let Some(anchor) = line.node_anchor.clone()
+            {
+                latest_heading_anchor = Some(anchor);
             }
         }
 
-        if let Some(anchor) = latest_heading_anchor {
-            if let Some(matched) = Self::match_available_anchor(&anchor, available_anchors) {
-                self.last_active_anchor = Some(matched.clone());
-                return ActiveSection::new(current_chapter, chapter_href, Some(matched));
-            }
+        if let Some(anchor) = latest_heading_anchor
+            && let Some(matched) = Self::match_available_anchor(&anchor, available_anchors)
+        {
+            self.last_active_anchor = Some(matched.clone());
+            return ActiveSection::new(current_chapter, chapter_href, Some(matched));
         }
 
-        if let Some(ref anchor) = self.last_active_anchor {
-            if let Some(matched) = Self::match_available_anchor(anchor, available_anchors) {
-                self.last_active_anchor = Some(matched.clone());
-                return ActiveSection::new(current_chapter, chapter_href, Some(matched));
-            }
+        if let Some(ref anchor) = self.last_active_anchor
+            && let Some(matched) = Self::match_available_anchor(anchor, available_anchors)
+        {
+            self.last_active_anchor = Some(matched.clone());
+            return ActiveSection::new(current_chapter, chapter_href, Some(matched));
         }
 
         self.last_active_anchor = None;
@@ -601,10 +600,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let visible_start = self.scroll_offset;
 
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
-            if line_idx >= visible_start {
-                if let Some(node_idx) = line.node_index {
-                    return node_idx;
-                }
+            if line_idx >= visible_start
+                && let Some(node_idx) = line.node_index
+            {
+                return node_idx;
             }
         }
 
@@ -747,15 +746,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn perform_node_restore(&mut self, node_index: usize) {
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
-            if let Some(node_idx) = line.node_index {
-                if node_idx >= node_index {
-                    if self.dual.active {
-                        self.dual_scroll_to_line(line_idx);
-                        return;
-                    }
-                    self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
+            if let Some(node_idx) = line.node_index
+                && node_idx >= node_index
+            {
+                if self.dual.active {
+                    self.dual_scroll_to_line(line_idx);
                     return;
                 }
+                self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
+                return;
             }
         }
     }
@@ -772,11 +771,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return;
         }
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
-            if let Some(node_idx) = line.node_index {
-                if node_idx >= node_index {
-                    self.highlight_line_temporarily(line_idx, duration);
-                    return;
-                }
+            if let Some(node_idx) = line.node_index
+                && node_idx >= node_index
+            {
+                self.highlight_line_temporarily(line_idx, duration);
+                return;
             }
         }
     }

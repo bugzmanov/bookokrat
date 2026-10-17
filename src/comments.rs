@@ -1443,13 +1443,14 @@ impl BookComments {
         for comment in &self.comments {
             let mut value =
                 serde_yaml::to_value(comment).context("Failed to serialize a comment")?;
-            if comment.is_text() && !self.legacy_layout_ids.contains(&comment.id) {
-                if let Some(mapping) = value.as_mapping_mut() {
-                    mapping.insert(
-                        ANCHOR_LAYOUT_KEY.into(),
-                        u64::from(CURRENT_ANCHOR_LAYOUT).into(),
-                    );
-                }
+            if comment.is_text()
+                && !self.legacy_layout_ids.contains(&comment.id)
+                && let Some(mapping) = value.as_mapping_mut()
+            {
+                mapping.insert(
+                    ANCHOR_LAYOUT_KEY.into(),
+                    u64::from(CURRENT_ANCHOR_LAYOUT).into(),
+                );
             }
             all.push(value);
         }

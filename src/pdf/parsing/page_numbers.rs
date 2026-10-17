@@ -131,10 +131,10 @@ impl PageNumberTracker {
             }
         }
 
-        if let Some((offset, count)) = best {
-            if count >= 3 {
-                self.offset = Some(offset);
-            }
+        if let Some((offset, count)) = best
+            && count >= 3
+        {
+            self.offset = Some(offset);
         }
     }
 }

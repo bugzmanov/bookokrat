@@ -533,12 +533,11 @@ pub fn render_page(
         restore_image_regions(&mut pixmap, &image_regions);
     }
 
-    if themed_rendering {
-        if let Ok(title_rects) = collect_title_rects(&page, spec.mag, page_bounds.0) {
-            if !title_rects.is_empty() {
-                apply_title_color(&mut pixmap, &title_rects, true);
-            }
-        }
+    if themed_rendering
+        && let Ok(title_rects) = collect_title_rects(&page, spec.mag, page_bounds.0)
+        && !title_rects.is_empty()
+    {
+        apply_title_color(&mut pixmap, &title_rects, true);
     }
 
     let (base_dpi_x, base_dpi_y) = pixmap.resolution();
@@ -1263,10 +1262,8 @@ fn extract_text(
                                     true
                                 };
 
-                                if include {
-                                    if let Some(c) = ch.char() {
-                                        line_text.push(c);
-                                    }
+                                if include && let Some(c) = ch.char() {
+                                    line_text.push(c);
                                 }
                             }
 
@@ -1641,18 +1638,17 @@ fn extract_djvu_line_bounds_with_scales(
         let mut prev_x1: Option<f32> = None;
 
         for segment in segments {
-            if let Some(prev_x1) = prev_x1 {
-                if prev_text_end < segment.visible_start
-                    && tl.text.is_char_boundary(prev_text_end)
-                    && tl.text.is_char_boundary(segment.visible_start)
-                {
-                    push_gap_chars(
-                        &mut chars,
-                        &tl.text[prev_text_end..segment.visible_start],
-                        prev_x1,
-                        segment.x0,
-                    );
-                }
+            if let Some(prev_x1) = prev_x1
+                && prev_text_end < segment.visible_start
+                && tl.text.is_char_boundary(prev_text_end)
+                && tl.text.is_char_boundary(segment.visible_start)
+            {
+                push_gap_chars(
+                    &mut chars,
+                    &tl.text[prev_text_end..segment.visible_start],
+                    prev_x1,
+                    segment.x0,
+                );
             }
 
             push_chars_evenly(&mut chars, segment.x0, segment.x1, &segment.text);

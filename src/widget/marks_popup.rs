@@ -99,28 +99,27 @@ impl MarksPopup {
         global_marks: &GlobalMarks,
     ) {
         let mut current_rows: Vec<MarkRow> = Vec::new();
-        if let Some(path) = current_book_path {
-            if let Some(bookmark) = local_bookmarks.get_bookmark(path) {
-                if let Some(map) = bookmark.marks.as_ref() {
-                    let book_label = bookmark
-                        .book_title
-                        .clone()
-                        .unwrap_or_else(|| short_book_name(path));
-                    let mut keys: Vec<char> = map.keys().copied().collect();
-                    keys.sort();
-                    for ch in keys {
-                        if let Some(loc) = map.get(&ch) {
-                            current_rows.push(MarkRow {
-                                ch,
-                                is_global: false,
-                                location: loc.clone().retarget_path(path.to_string()),
-                                book_path: path.to_string(),
-                                book_label: book_label.clone(),
-                                location_label: location_label(loc),
-                                snippet: loc.snippet().map(|s| s.to_string()),
-                            });
-                        }
-                    }
+        if let Some(path) = current_book_path
+            && let Some(bookmark) = local_bookmarks.get_bookmark(path)
+            && let Some(map) = bookmark.marks.as_ref()
+        {
+            let book_label = bookmark
+                .book_title
+                .clone()
+                .unwrap_or_else(|| short_book_name(path));
+            let mut keys: Vec<char> = map.keys().copied().collect();
+            keys.sort();
+            for ch in keys {
+                if let Some(loc) = map.get(&ch) {
+                    current_rows.push(MarkRow {
+                        ch,
+                        is_global: false,
+                        location: loc.clone().retarget_path(path.to_string()),
+                        book_path: path.to_string(),
+                        book_label: book_label.clone(),
+                        location_label: location_label(loc),
+                        snippet: loc.snippet().map(|s| s.to_string()),
+                    });
                 }
             }
         }

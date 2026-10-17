@@ -71,10 +71,10 @@ impl JumpList {
         // pointing into history, breaking the next jump_back.
         self.current_position = None;
 
-        if let Some(last) = self.entries.back() {
-            if last == &location {
-                return;
-            }
+        if let Some(last) = self.entries.back()
+            && last == &location
+        {
+            return;
         }
         self.entries.push_back(location);
         while self.entries.len() > self.max_size {
@@ -86,14 +86,14 @@ impl JumpList {
     /// it will be pushed first so we can Ctrl+I back to it.
     pub fn jump_back(&mut self, current_location: Option<JumpLocation>) -> Option<JumpLocation> {
         // If at head and current location provided, save it first
-        if self.current_position.is_none() {
-            if let Some(ref loc) = current_location {
-                // Only push if different from last entry
-                if self.entries.back() != Some(loc) {
-                    self.entries.push_back(loc.clone());
-                    while self.entries.len() > self.max_size {
-                        self.entries.pop_front();
-                    }
+        if self.current_position.is_none()
+            && let Some(ref loc) = current_location
+        {
+            // Only push if different from last entry
+            if self.entries.back() != Some(loc) {
+                self.entries.push_back(loc.clone());
+                while self.entries.len() > self.max_size {
+                    self.entries.pop_front();
                 }
             }
         }

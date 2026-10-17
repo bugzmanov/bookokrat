@@ -87,10 +87,10 @@ impl Iterator for FocusPlusMinusOneIterator {
             };
             self.step += 1;
 
-            if let Some(idx) = self.start.checked_add_signed(offset) {
-                if self.max_range.contains(&idx) {
-                    return Some(idx);
-                }
+            if let Some(idx) = self.start.checked_add_signed(offset)
+                && self.max_range.contains(&idx)
+            {
+                return Some(idx);
             }
         }
     }
@@ -475,10 +475,9 @@ impl ConverterEngine {
         if old_page_viewport.is_some_and(|old| {
             old.x_offset_cells != new_viewport.x_offset_cells
                 || old.viewport_width_cells != new_viewport.viewport_width_cells
-        }) {
-            if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
-                cached.tile_cache.clear();
-            }
+        }) && let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page)
+        {
+            cached.tile_cache.clear();
         }
 
         if self.picker.protocol_type() != ProtocolType::Kitty {
@@ -1203,24 +1202,24 @@ impl ConverterEngine {
             // Full tile render already includes cursor overlay via build_overlay_set
             // (self.cursor_rect was updated before this call), so no separate
             // render_cursor_tile_updates is needed.
-            if let Some(vp) = self.viewport.as_ref() {
-                if let Some(page_num) = affected_page {
-                    let overlays = self.build_overlay_set(page_num);
-                    if let Some(Some(cached)) = self.page_cache.get_mut(page_num) {
-                        match render_viewport_tiles(cached, vp, &overlays, &self.picker) {
-                            Ok(img) => {
-                                sender.send(Ok(RenderedFrame {
-                                    index: page_num,
-                                    requested_scale: cached.data.requested_scale,
-                                    achieved_scale: cached.data.achieved_scale,
-                                    image: img,
-                                }))?;
-                                self.tiled_pages.insert(page_num);
-                                self.sent_for_viewport.insert(page_num);
-                            }
-                            Err(e) => {
-                                sender.send(Err(e))?;
-                            }
+            if let Some(vp) = self.viewport.as_ref()
+                && let Some(page_num) = affected_page
+            {
+                let overlays = self.build_overlay_set(page_num);
+                if let Some(Some(cached)) = self.page_cache.get_mut(page_num) {
+                    match render_viewport_tiles(cached, vp, &overlays, &self.picker) {
+                        Ok(img) => {
+                            sender.send(Ok(RenderedFrame {
+                                index: page_num,
+                                requested_scale: cached.data.requested_scale,
+                                achieved_scale: cached.data.achieved_scale,
+                                image: img,
+                            }))?;
+                            self.tiled_pages.insert(page_num);
+                            self.sent_for_viewport.insert(page_num);
+                        }
+                        Err(e) => {
+                            sender.send(Err(e))?;
                         }
                     }
                 }
@@ -1394,10 +1393,10 @@ impl ConverterEngine {
             .or_else(|| self.viewport.filter(|vp| vp.page == page_num));
 
         // Use tile rendering for all non-Kitty protocols (matches reconvert_pages logic)
-        if self.picker.protocol_type() != ProtocolType::Kitty {
-            if let Some(viewport) = page_viewport.as_ref() {
-                return render_viewport_tiles(cached, viewport, overlays, &self.picker);
-            }
+        if self.picker.protocol_type() != ProtocolType::Kitty
+            && let Some(viewport) = page_viewport.as_ref()
+        {
+            return render_viewport_tiles(cached, viewport, overlays, &self.picker);
         }
 
         render_page_with_viewport(
@@ -1490,14 +1489,14 @@ impl ConverterEngine {
             }
         }
 
-        if let Some(cursor) = cursor {
-            if cursor.page == page_num {
-                let expanded = expand_cursor_rect(cursor, &self.picker);
-                let x1 = expanded.x.saturating_add(expanded.width);
-                let y1 = expanded.y.saturating_add(expanded.height);
-                if let Some(rect) = PixelRect::new(expanded.x, expanded.y, x1, y1) {
-                    overlays.cursor = Some(rect);
-                }
+        if let Some(cursor) = cursor
+            && cursor.page == page_num
+        {
+            let expanded = expand_cursor_rect(cursor, &self.picker);
+            let x1 = expanded.x.saturating_add(expanded.width);
+            let y1 = expanded.y.saturating_add(expanded.height);
+            if let Some(rect) = PixelRect::new(expanded.x, expanded.y, x1, y1) {
+                overlays.cursor = Some(rect);
             }
         }
 
@@ -1536,10 +1535,10 @@ impl ConverterEngine {
         let end = current_page.saturating_add(radius);
 
         for (i, cached) in self.page_cache.iter_mut().enumerate() {
-            if let Some(page) = cached {
-                if i < start || i > end {
-                    page.decoded = None;
-                }
+            if let Some(page) = cached
+                && (i < start || i > end)
+            {
+                page.decoded = None;
             }
         }
     }
@@ -1955,13 +1954,13 @@ fn render_page_with_viewport(
     apply_overlays_dynamic(&mut dyn_img, overlays);
 
     let mut area_cell_size = cached_cell_size(cached);
-    if let Some(viewport) = viewport {
-        if viewport.page == page_num {
-            let (cropped, cell_size) =
-                crop_to_viewport(dyn_img, cached_cell_size(cached), viewport, picker);
-            dyn_img = cropped;
-            area_cell_size = cell_size;
-        }
+    if let Some(viewport) = viewport
+        && viewport.page == page_num
+    {
+        let (cropped, cell_size) =
+            crop_to_viewport(dyn_img, cached_cell_size(cached), viewport, picker);
+        dyn_img = cropped;
+        area_cell_size = cell_size;
     }
 
     normalize_for_protocol(&mut dyn_img, area_cell_size, picker);

@@ -392,15 +392,15 @@ fn legacy_config_path() -> Option<PathBuf> {
 }
 
 fn find_existing_config() -> Option<PathBuf> {
-    if let Some(path) = preferred_config_path() {
-        if path.exists() {
-            return Some(path);
-        }
+    if let Some(path) = preferred_config_path()
+        && path.exists()
+    {
+        return Some(path);
     }
-    if let Some(path) = legacy_config_path() {
-        if path.exists() {
-            return Some(path);
-        }
+    if let Some(path) = legacy_config_path()
+        && path.exists()
+    {
+        return Some(path);
     }
     None
 }
@@ -536,13 +536,12 @@ fn settings_summary(settings: &Settings) -> String {
 }
 
 fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                error!("Failed to create config directory {parent:?}: {e}");
-                return;
-            }
-        }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        error!("Failed to create config directory {parent:?}: {e}");
+        return;
     }
 
     // If file exists, do targeted update preserving user comments and manual edits
@@ -611,11 +610,11 @@ fn update_settings_values(existing_content: &str, settings: &Settings) -> String
             Some(pos) => trimmed[..pos].trim().to_string(),
             None => continue,
         };
-        if key_set.contains(key_owned.as_str()) {
-            if let Some((_, value)) = key_values.iter().find(|(k, _)| k == &key_owned) {
-                *line = format!("{}: {}", key_owned, value);
-                found_keys.insert(key_owned);
-            }
+        if key_set.contains(key_owned.as_str())
+            && let Some((_, value)) = key_values.iter().find(|(k, _)| k == &key_owned)
+        {
+            *line = format!("{}: {}", key_owned, value);
+            found_keys.insert(key_owned);
         }
     }
 

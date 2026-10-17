@@ -268,10 +268,10 @@ pub fn migrate_if_needed(library_dir: &Path, paths: &LibraryPaths) -> Result<()>
         }
     }
 
-    if old_log.exists() {
-        if let Err(e) = fs::remove_file(&old_log) {
-            warn!("Failed to remove old log file: {e}");
-        }
+    if old_log.exists()
+        && let Err(e) = fs::remove_file(&old_log)
+    {
+        warn!("Failed to remove old log file: {e}");
     }
 
     Ok(())

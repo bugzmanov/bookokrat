@@ -154,10 +154,10 @@ fn collect_all_library_items() -> Vec<HistoryItem> {
                 .unwrap_or_else(|| key.clone());
             let local_time = Local.from_utc_datetime(&bookmark.last_read.naive_utc());
 
-            if let Some((existing_time, _)) = by_path.get(&resolved_path) {
-                if *existing_time >= local_time {
-                    continue;
-                }
+            if let Some((existing_time, _)) = by_path.get(&resolved_path)
+                && *existing_time >= local_time
+            {
+                continue;
             }
 
             let title = bookmark
@@ -294,10 +294,10 @@ impl ReadingHistory {
         self.current_items = new.current_items;
         self.all_items = new.all_items;
         let len = self.active_items().len();
-        if let Some(sel) = self.active_state().selected() {
-            if sel >= len {
-                self.active_state_mut().select(Some(len.saturating_sub(1)));
-            }
+        if let Some(sel) = self.active_state().selected()
+            && sel >= len
+        {
+            self.active_state_mut().select(Some(len.saturating_sub(1)));
         }
         self.current_tab = tab;
     }
@@ -703,20 +703,19 @@ impl ReadingHistory {
     pub fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
         debug!("ReadingHistory: Mouse click at ({x}, {y})");
 
-        if let Some(list_area) = self.last_list_area {
-            if x >= list_area.x
-                && x < list_area.x + list_area.width
-                && y >= list_area.y
-                && y < list_area.y + list_area.height
-            {
-                let offset = self.active_state().offset();
-                let relative_y = y.saturating_sub(list_area.y);
-                let new_index = offset + relative_y as usize;
-                if new_index < self.active_items().len() {
-                    self.active_state_mut().select(Some(new_index));
-                    debug!("ReadingHistory: Selected item at index {new_index}");
-                    return true;
-                }
+        if let Some(list_area) = self.last_list_area
+            && x >= list_area.x
+            && x < list_area.x + list_area.width
+            && y >= list_area.y
+            && y < list_area.y + list_area.height
+        {
+            let offset = self.active_state().offset();
+            let relative_y = y.saturating_sub(list_area.y);
+            let new_index = offset + relative_y as usize;
+            if new_index < self.active_items().len() {
+                self.active_state_mut().select(Some(new_index));
+                debug!("ReadingHistory: Selected item at index {new_index}");
+                return true;
             }
         }
         false

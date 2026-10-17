@@ -137,12 +137,12 @@ impl Parser {
                     't' => {
                         let mut cell_size = None;
                         let inner: Vec<&str> = self.data.split(';').collect();
-                        if let [_, h, w] = inner[..] {
-                            if let (Ok(h), Ok(w)) = (h.parse::<u16>(), w.parse::<u16>()) {
-                                if w > 0 && h > 0 {
-                                    cell_size = Some((w, h));
-                                }
-                            }
+                        if let [_, h, w] = inner[..]
+                            && let (Ok(h), Ok(w)) = (h.parse::<u16>(), w.parse::<u16>())
+                            && w > 0
+                            && h > 0
+                        {
+                            cell_size = Some((w, h));
                         }
                         self.restart();
                         return vec![Response::CellSize(cell_size)];
@@ -150,10 +150,10 @@ impl Parser {
                     'R' => {
                         let mut cursor_pos = None;
                         let inner: Vec<&str> = self.data[1..].split(';').collect();
-                        if let [x, w] = inner[..] {
-                            if let (Ok(x), Ok(y)) = (x.parse::<u16>(), w.parse::<u16>()) {
-                                cursor_pos = Some((y, x));
-                            }
+                        if let [x, w] = inner[..]
+                            && let (Ok(x), Ok(y)) = (x.parse::<u16>(), w.parse::<u16>())
+                        {
+                            cursor_pos = Some((y, x));
                         }
                         if let Some((x, y)) = cursor_pos {
                             self.restart();

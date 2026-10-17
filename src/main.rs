@@ -225,12 +225,11 @@ fn main() -> Result<()> {
     let log_path = library::resolve_log_path();
 
     // Run migration before logging is initialized (prints to stdout)
-    if !args.test_mode {
-        if let Ok(ref paths) = lib_paths {
-            if let Err(e) = library::migrate_if_needed(&library_dir, paths) {
-                eprintln!("Warning: migration failed: {e}");
-            }
-        }
+    if !args.test_mode
+        && let Ok(ref paths) = lib_paths
+        && let Err(e) = library::migrate_if_needed(&library_dir, paths)
+    {
+        eprintln!("Warning: migration failed: {e}");
     }
 
     // Initialize logging with html5ever DEBUG logs filtered out

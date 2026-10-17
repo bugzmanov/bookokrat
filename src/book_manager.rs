@@ -252,14 +252,14 @@ impl BookManager {
         let path = Path::new(file_path);
 
         // For HTML files, preserve the full filename with extension
-        if let Some(extension) = path.extension() {
-            if extension == "html" || extension == "htm" {
-                return path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-            }
+        if let Some(extension) = path.extension()
+            && (extension == "html" || extension == "htm")
+        {
+            return path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
         }
 
         // For other files (like EPUB), remove the extension

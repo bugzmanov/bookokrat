@@ -307,21 +307,19 @@ impl ResizeEncodeRender for StatefulProtocol {
         // Special handling for Kitty with viewport mode
         if let (Some(Resize::Viewport(viewport_opts)), StatefulProtocolType::Kitty(kitty)) =
             (self.last_resize.as_ref(), &mut self.protocol_type)
+            && kitty.tiled_data.is_some()
         {
-            if kitty.tiled_data.is_some() {
-                kitty.render_viewport(area, buf, viewport_opts.y_offset);
-                return;
-            }
+            kitty.render_viewport(area, buf, viewport_opts.y_offset);
+            return;
         }
 
         // Same for tiled ITerm2 viewport mode
         if let (Some(Resize::Viewport(viewport_opts)), StatefulProtocolType::ITerm2(iterm)) =
             (self.last_resize.as_ref(), &mut self.protocol_type)
+            && iterm.tiled_data.is_some()
         {
-            if iterm.tiled_data.is_some() {
-                iterm.render_viewport(area, buf, viewport_opts.y_offset, viewport_opts.settled);
-                return;
-            }
+            iterm.render_viewport(area, buf, viewport_opts.y_offset, viewport_opts.settled);
+            return;
         }
 
         self.protocol_type.inner_trait_mut().render(area, buf);
@@ -329,11 +327,11 @@ impl ResizeEncodeRender for StatefulProtocol {
 
     fn needs_resize(&self, resize: &Resize, area: Rect) -> Option<Rect> {
         // Check if viewport has changed (for scrolling)
-        if let Resize::Viewport(viewport_opts) = resize {
-            if self.last_viewport != Some(*viewport_opts) {
-                // Viewport position changed, need to re-render different tiles
-                return Some(resize.render_area(&self.source, self.font_size, area));
-            }
+        if let Resize::Viewport(viewport_opts) = resize
+            && self.last_viewport != Some(*viewport_opts)
+        {
+            // Viewport position changed, need to re-render different tiles
+            return Some(resize.render_area(&self.source, self.font_size, area));
         }
 
         resize.needs_resize(

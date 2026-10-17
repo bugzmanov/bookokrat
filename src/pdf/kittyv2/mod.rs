@@ -47,15 +47,14 @@ pub fn refresh_pane_offset() {
     if let Ok(output) = std::process::Command::new("tmux")
         .args(["display-message", "-p", "-F", "#{pane_top}:#{pane_left}"])
         .output()
+        && let Ok(text) = String::from_utf8(output.stdout)
     {
-        if let Ok(text) = String::from_utf8(output.stdout) {
-            let parts: Vec<&str> = text.trim().split(':').collect();
-            if parts.len() == 2 {
-                if let (Ok(top), Ok(left)) = (parts[0].parse::<u16>(), parts[1].parse::<u16>()) {
-                    PANE_TOP.store(top, Ordering::Relaxed);
-                    PANE_LEFT.store(left, Ordering::Relaxed);
-                }
-            }
+        let parts: Vec<&str> = text.trim().split(':').collect();
+        if parts.len() == 2
+            && let (Ok(top), Ok(left)) = (parts[0].parse::<u16>(), parts[1].parse::<u16>())
+        {
+            PANE_TOP.store(top, Ordering::Relaxed);
+            PANE_LEFT.store(left, Ordering::Relaxed);
         }
     }
 }

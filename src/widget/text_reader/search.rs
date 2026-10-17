@@ -34,16 +34,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .lines
             .iter()
             .position(|line| line.node_index == Some(node_index))
-        {
-            if let Some(match_idx) = self
+            && let Some(match_idx) = self
                 .search_state
                 .matches
                 .iter()
                 .position(|m| m.index == target_line_idx)
-            {
-                self.search_state.current_match_index = Some(match_idx);
-                self.jump_to_match(target_line_idx);
-            }
+        {
+            self.search_state.current_match_index = Some(match_idx);
+            self.jump_to_match(target_line_idx);
         }
     }
 

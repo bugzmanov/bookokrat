@@ -25,11 +25,11 @@ fn percent_decode(input: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '%' {
             let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte as char);
-                    continue;
-                }
+            if hex.len() == 2
+                && let Ok(byte) = u8::from_str_radix(&hex, 16)
+            {
+                result.push(byte as char);
+                continue;
             }
             result.push('%');
             result.push_str(&hex);
@@ -284,14 +284,14 @@ impl BookStat {
         toc_title_map: &HashMap<String, String>,
         content: &str,
     ) -> Option<String> {
-        if let Some(spine_item) = epub.spine.get(spine_index) {
-            if let Some(resource) = epub.resources.get(&spine_item.idref) {
-                let path_str = resource.path.to_string_lossy();
-                // Try matching against TOC entries by path suffix
-                for (toc_href, title) in toc_title_map {
-                    if path_str.ends_with(toc_href.as_str()) || toc_href.ends_with(&*path_str) {
-                        return Some(title.clone());
-                    }
+        if let Some(spine_item) = epub.spine.get(spine_index)
+            && let Some(resource) = epub.resources.get(&spine_item.idref)
+        {
+            let path_str = resource.path.to_string_lossy();
+            // Try matching against TOC entries by path suffix
+            for (toc_href, title) in toc_title_map {
+                if path_str.ends_with(toc_href.as_str()) || toc_href.ends_with(&*path_str) {
+                    return Some(title.clone());
                 }
             }
         }

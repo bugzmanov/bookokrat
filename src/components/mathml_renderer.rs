@@ -837,19 +837,20 @@ impl MathMLParser {
             };
 
             // Try Unicode if both are simple
-            if !subscript_text.is_empty() && !superscript_text.is_empty() {
-                if let (Some(unicode_sub), Some(unicode_sup)) = (
+            if !subscript_text.is_empty()
+                && !superscript_text.is_empty()
+                && let (Some(unicode_sub), Some(unicode_sup)) = (
                     Self::try_unicode_subscript(&subscript_text, self.use_unicode),
                     Self::try_unicode_superscript(&superscript_text, self.use_unicode),
-                ) {
-                    let base_text = base.content[0]
-                        .iter()
-                        .collect::<String>()
-                        .trim()
-                        .to_string();
-                    let combined_text = format!("{base_text}{unicode_sub}{unicode_sup}");
-                    return Ok(MathBox::new(&combined_text));
-                }
+                )
+            {
+                let base_text = base.content[0]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
+                let combined_text = format!("{base_text}{unicode_sub}{unicode_sup}");
+                return Ok(MathBox::new(&combined_text));
             }
         }
 
@@ -1333,11 +1334,11 @@ impl MathMLParser {
                             let td_tag = td.tag_name().name();
                             if td_tag == "mtd" {
                                 for elem_child in td.children() {
-                                    if let Some(text) = elem_child.text() {
-                                        if text.to_lowercase().contains("where") {
-                                            has_where_clause = true;
-                                            break;
-                                        }
+                                    if let Some(text) = elem_child.text()
+                                        && text.to_lowercase().contains("where")
+                                    {
+                                        has_where_clause = true;
+                                        break;
                                     }
                                 }
                             }
@@ -1785,52 +1786,52 @@ impl MathMLParser {
 
         while i < boxes.len() {
             // Check for pattern: opening_paren + content + closing_paren
-            if i + 2 < boxes.len() {
-                if let Some(open_char) = self.is_single_paren(&boxes[i]) {
-                    // Look ahead to find matching closing parenthesis
-                    let mut paren_count = 1;
-                    let mut closing_pos = None;
+            if i + 2 < boxes.len()
+                && let Some(open_char) = self.is_single_paren(&boxes[i])
+            {
+                // Look ahead to find matching closing parenthesis
+                let mut paren_count = 1;
+                let mut closing_pos = None;
 
-                    for (j, candidate) in boxes.iter().enumerate().skip(i + 1) {
-                        if let Some(ch) = self.is_single_paren(candidate) {
-                            match (open_char, ch) {
-                                ('(', ')') | ('[', ']') | ('{', '}') => {
-                                    paren_count -= 1;
-                                    if paren_count == 0 {
-                                        closing_pos = Some(j);
-                                        break;
-                                    }
+                for (j, candidate) in boxes.iter().enumerate().skip(i + 1) {
+                    if let Some(ch) = self.is_single_paren(candidate) {
+                        match (open_char, ch) {
+                            ('(', ')') | ('[', ']') | ('{', '}') => {
+                                paren_count -= 1;
+                                if paren_count == 0 {
+                                    closing_pos = Some(j);
+                                    break;
                                 }
-                                ('(', '(') | ('[', '[') | ('{', '{') => {
-                                    paren_count += 1;
-                                }
-                                _ => {}
                             }
+                            ('(', '(') | ('[', '[') | ('{', '{') => {
+                                paren_count += 1;
+                            }
+                            _ => {}
                         }
                     }
+                }
 
-                    // If we found a matching closing parenthesis
-                    if let Some(close_idx) = closing_pos {
-                        // Check the height of content between parentheses
-                        let content_boxes = &boxes[i + 1..close_idx];
-                        let max_height = content_boxes.iter().map(|b| b.height).max().unwrap_or(0);
+                // If we found a matching closing parenthesis
+                if let Some(close_idx) = closing_pos {
+                    // Check the height of content between parentheses
+                    let content_boxes = &boxes[i + 1..close_idx];
+                    let max_height = content_boxes.iter().map(|b| b.height).max().unwrap_or(0);
 
-                        if max_height >= 3 {
-                            // Use multi-line parentheses
-                            let close_char = match open_char {
-                                '(' => ')',
-                                '[' => ']',
-                                '{' => '}',
-                                _ => open_char,
-                            };
+                    if max_height >= 3 {
+                        // Use multi-line parentheses
+                        let close_char = match open_char {
+                            '(' => ')',
+                            '[' => ']',
+                            '{' => '}',
+                            _ => open_char,
+                        };
 
-                            result.push(self.create_multiline_paren(open_char, max_height));
-                            result.extend_from_slice(content_boxes);
-                            result.push(self.create_multiline_paren(close_char, max_height));
+                        result.push(self.create_multiline_paren(open_char, max_height));
+                        result.extend_from_slice(content_boxes);
+                        result.push(self.create_multiline_paren(close_char, max_height));
 
-                            i = close_idx + 1;
-                            continue;
-                        }
+                        i = close_idx + 1;
+                        continue;
                     }
                 }
             }

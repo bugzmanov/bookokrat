@@ -774,10 +774,10 @@ impl PdfReaderState {
         // next character and must bypass the keymap: otherwise a target char
         // that is itself a bound key (l, w, e, ...) dispatches as a motion and
         // the pending state is silently dropped.
-        if let KeyCode::Char(c) = key.code {
-            if self.normal_mode.has_pending_char_motion() || self.normal_mode.pending_inner {
-                return InputResponse::handled(self.handle_normal_mode_key(c));
-            }
+        if let KeyCode::Char(c) = key.code
+            && (self.normal_mode.has_pending_char_motion() || self.normal_mode.pending_inner)
+        {
+            return InputResponse::handled(self.handle_normal_mode_key(c));
         }
 
         let input = key_event_to_input(&key);
@@ -912,10 +912,10 @@ impl PdfReaderState {
                 InputResponse::handled(self.scroll_full_screen(ScrollDirection::Up))
             }
             Action::FollowLink => {
-                if self.go_to_page_input.is_none() {
-                    if let Some(target) = self.link_target_at_cursor() {
-                        return InputResponse::handled(Some(self.activate_link_target(target)));
-                    }
+                if self.go_to_page_input.is_none()
+                    && let Some(target) = self.link_target_at_cursor()
+                {
+                    return InputResponse::handled(Some(self.activate_link_target(target)));
                 }
                 InputResponse::handled(None)
             }
@@ -1171,16 +1171,17 @@ impl PdfReaderState {
         }
 
         // Quick page jump: digits accumulate, gg confirms
-        if let KeyCode::Char(c) = key.code {
-            if c.is_ascii_digit() && !key.modifiers.contains(KeyModifiers::CONTROL) {
-                if let Some(ref mut qj) = self.quick_page_jump {
-                    qj.push(c);
-                } else {
-                    self.quick_page_jump = Some(QuickPageJump::new(c));
-                }
-                self.key_seq.clear();
-                return Some(InputAction::Redraw);
+        if let KeyCode::Char(c) = key.code
+            && c.is_ascii_digit()
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            if let Some(ref mut qj) = self.quick_page_jump {
+                qj.push(c);
+            } else {
+                self.quick_page_jump = Some(QuickPageJump::new(c));
             }
+            self.key_seq.clear();
+            return Some(InputAction::Redraw);
         }
 
         let input = key_event_to_input(&key);
@@ -1193,10 +1194,10 @@ impl PdfReaderState {
             LookupResult::Found(action) => {
                 self.key_seq.clear();
                 // gg with pending quick page jump
-                if action == Action::GoTop {
-                    if let Some(qj) = self.quick_page_jump.take() {
-                        return self.execute_quick_page_jump(qj);
-                    }
+                if action == Action::GoTop
+                    && let Some(qj) = self.quick_page_jump.take()
+                {
+                    return self.execute_quick_page_jump(qj);
                 }
                 // Non-g, non-digit clears quick page jump
                 if !matches!(action, Action::GoTop | Action::SynctexInverse) {
@@ -1387,11 +1388,11 @@ impl PdfReaderState {
     }
 
     fn handle_paste(&mut self, text: &str) -> Option<InputAction> {
-        if self.comment_input.is_active() {
-            if let Some(textarea) = self.comment_input.textarea.as_mut() {
-                textarea.insert_str(text);
-                return Some(InputAction::Redraw);
-            }
+        if self.comment_input.is_active()
+            && let Some(textarea) = self.comment_input.textarea.as_mut()
+        {
+            textarea.insert_str(text);
+            return Some(InputAction::Redraw);
         }
         None
     }
@@ -2823,10 +2824,10 @@ impl PdfReaderState {
             total_height.saturating_sub(viewport_height)
         };
 
-        if let Some(z) = self.zoom.as_mut() {
-            if z.global_scroll_offset > max_offset {
-                z.global_scroll_offset = max_offset;
-            }
+        if let Some(z) = self.zoom.as_mut()
+            && z.global_scroll_offset > max_offset
+        {
+            z.global_scroll_offset = max_offset;
         }
     }
 
@@ -3290,14 +3291,14 @@ impl PdfReaderState {
                 };
 
                 if let Some(point) = self.terminal_to_selection_point(col, row, font_size) {
-                    if click_count == 1 {
-                        if let Some(target) = self.link_target_at_point(&point) {
-                            if self.selection.has_selection() {
-                                self.selection.clear();
-                                self.last_render.rect = Rect::default();
-                            }
-                            return Some(self.activate_link_target(target));
+                    if click_count == 1
+                        && let Some(target) = self.link_target_at_point(&point)
+                    {
+                        if self.selection.has_selection() {
+                            self.selection.clear();
+                            self.last_render.rect = Rect::default();
                         }
+                        return Some(self.activate_link_target(target));
                     }
 
                     if self.normal_mode.active {
@@ -3417,12 +3418,11 @@ impl PdfReaderState {
                     if let Some(point) = self.terminal_to_selection_point(col, row, font_size) {
                         self.selection.update_end(point);
                         self.last_render.rect = Rect::default();
-                        if self.normal_mode.active {
-                            if let Some(action) =
+                        if self.normal_mode.active
+                            && let Some(action) =
                                 self.start_visual_from_selection(VisualMode::CharacterWise)
-                            {
-                                return Some(action);
-                            }
+                        {
+                            return Some(action);
                         }
                         Some(InputAction::SelectionChanged(
                             self.compute_selection_rects(),
@@ -3474,13 +3474,13 @@ impl PdfReaderState {
                 rendered_page.pixel_w,
                 rendered_page.pixel_h,
                 rendered_page.full_cell_size,
-            ) {
-                if cell_size.width > 0 && cell_size.height > 0 {
-                    return (
-                        pw as f32 / cell_size.width as f32,
-                        ph as f32 / cell_size.height as f32,
-                    );
-                }
+            ) && cell_size.width > 0
+                && cell_size.height > 0
+            {
+                return (
+                    pw as f32 / cell_size.width as f32,
+                    ph as f32 / cell_size.height as f32,
+                );
             }
             (f32::from(font_size.0), f32::from(font_size.1))
         };
@@ -5480,14 +5480,15 @@ impl PdfReaderState {
                     }
                 };
 
-                if let Some(last_pos) = self.normal_mode.get_last_position() {
-                    if last_pos.page == page && last_pos.line_idx < line_bounds.len() {
-                        self.normal_mode
-                            .activate_at(page, last_pos.line_idx, last_pos.char_idx);
-                        let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
-                        let viewport = self.current_viewport_update();
-                        return Some(InputAction::CursorChanged(cursor_rect, viewport));
-                    }
+                if let Some(last_pos) = self.normal_mode.get_last_position()
+                    && last_pos.page == page
+                    && last_pos.line_idx < line_bounds.len()
+                {
+                    self.normal_mode
+                        .activate_at(page, last_pos.line_idx, last_pos.char_idx);
+                    let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
+                    let viewport = self.current_viewport_update();
+                    return Some(InputAction::CursorChanged(cursor_rect, viewport));
                 }
 
                 let target_line = if !self.is_kitty {
@@ -5504,23 +5505,23 @@ impl PdfReaderState {
                 return Some(InputAction::CursorChanged(cursor_rect, viewport));
             }
 
-            if let Some(last_pos) = self.normal_mode.get_last_position() {
-                if self.is_position_visible(last_pos.page, last_pos.line_idx) {
-                    let line_bounds = self
-                        .rendered
-                        .get(last_pos.page)
-                        .map(|r| r.line_bounds.as_slice())
-                        .unwrap_or(&[]);
+            if let Some(last_pos) = self.normal_mode.get_last_position()
+                && self.is_position_visible(last_pos.page, last_pos.line_idx)
+            {
+                let line_bounds = self
+                    .rendered
+                    .get(last_pos.page)
+                    .map(|r| r.line_bounds.as_slice())
+                    .unwrap_or(&[]);
 
-                    if let Some(line) = line_bounds.get(last_pos.line_idx)
-                        && !line.chars.is_empty()
-                    {
-                        let char_idx = last_pos.char_idx.min(line.chars.len().saturating_sub(1));
-                        self.normal_mode
-                            .activate_at(last_pos.page, last_pos.line_idx, char_idx);
-                        let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
-                        return Some(InputAction::CursorChanged(cursor_rect, None));
-                    }
+                if let Some(line) = line_bounds.get(last_pos.line_idx)
+                    && !line.chars.is_empty()
+                {
+                    let char_idx = last_pos.char_idx.min(line.chars.len().saturating_sub(1));
+                    self.normal_mode
+                        .activate_at(last_pos.page, last_pos.line_idx, char_idx);
+                    let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
+                    return Some(InputAction::CursorChanged(cursor_rect, None));
                 }
             }
 
@@ -6337,10 +6338,10 @@ impl PdfReaderState {
 
     fn jump_to_next_search_match(&mut self) -> Option<InputAction> {
         if !self.page_search.has_matches() {
-            if let Some(query) = self.page_search.query.clone() {
-                if self.page_search.matches_page != self.page {
-                    self.execute_page_search(&query);
-                }
+            if let Some(query) = self.page_search.query.clone()
+                && self.page_search.matches_page != self.page
+            {
+                self.execute_page_search(&query);
             }
             if !self.page_search.has_matches() {
                 self.set_error_hud("No search matches".to_string());
@@ -6354,10 +6355,10 @@ impl PdfReaderState {
 
     fn jump_to_prev_search_match(&mut self) -> Option<InputAction> {
         if !self.page_search.has_matches() {
-            if let Some(query) = self.page_search.query.clone() {
-                if self.page_search.matches_page != self.page {
-                    self.execute_page_search(&query);
-                }
+            if let Some(query) = self.page_search.query.clone()
+                && self.page_search.matches_page != self.page
+            {
+                self.execute_page_search(&query);
             }
             if !self.page_search.has_matches() {
                 self.set_error_hud("No search matches".to_string());
@@ -6484,10 +6485,9 @@ impl PdfReaderState {
                 update_pdf_toc_active(table_of_contents, self, page, toc_height);
                 if let Some(viewport) = viewport
                     && !self.is_kitty
+                    && let Some(cmd) = self.viewport_command(viewport)
                 {
-                    if let Some(cmd) = self.viewport_command(viewport) {
-                        send_conversion(cmd);
-                    }
+                    send_conversion(cmd);
                 }
                 if !self.normal_mode.active {
                     send_conversion(crate::pdf::ConversionCommand::UpdateCursor(None));
@@ -6495,10 +6495,10 @@ impl PdfReaderState {
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
             InputAction::ViewportChanged(viewport) => {
-                if !self.is_kitty {
-                    if let Some(cmd) = self.viewport_command(viewport) {
-                        send_conversion(cmd);
-                    }
+                if !self.is_kitty
+                    && let Some(cmd) = self.viewport_command(viewport)
+                {
+                    send_conversion(cmd);
                 }
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
@@ -6520,10 +6520,10 @@ impl PdfReaderState {
                     send_conversion(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
                 }
                 self.last_sent_viewport = None;
-                if let Some(vp) = viewport {
-                    if let Some(cmd) = self.viewport_command(vp) {
-                        send_conversion(cmd);
-                    }
+                if let Some(vp) = viewport
+                    && let Some(cmd) = self.viewport_command(vp)
+                {
+                    send_conversion(cmd);
                 }
             }
             InputAction::ThemeChanged { black, white } => {
@@ -6665,10 +6665,10 @@ impl PdfReaderState {
                     self.force_redraw();
                 }
                 send_conversion(crate::pdf::ConversionCommand::UpdateCursor(cursor));
-                if let Some(viewport) = viewport {
-                    if let Some(cmd) = self.viewport_command(viewport) {
-                        send_conversion(cmd);
-                    }
+                if let Some(viewport) = viewport
+                    && let Some(cmd) = self.viewport_command(viewport)
+                {
+                    send_conversion(cmd);
                 }
             }
             InputAction::VisualChanged(rects, viewport) => {
@@ -6681,10 +6681,10 @@ impl PdfReaderState {
                     self.get_cursor_rect(),
                 ));
                 send_conversion(crate::pdf::ConversionCommand::UpdateVisual(rects));
-                if let Some(viewport) = viewport {
-                    if let Some(cmd) = self.viewport_command(viewport) {
-                        send_conversion(cmd);
-                    }
+                if let Some(viewport) = viewport
+                    && let Some(cmd) = self.viewport_command(viewport)
+                {
+                    send_conversion(cmd);
                 }
             }
             InputAction::ExitNormalMode => {
@@ -6715,10 +6715,10 @@ impl PdfReaderState {
                     }
                 }
                 send_conversion(crate::pdf::ConversionCommand::NavigateTo(page));
-                if let Some(viewport) = viewport {
-                    if let Some(cmd) = self.viewport_command(viewport) {
-                        send_conversion(cmd);
-                    }
+                if let Some(viewport) = viewport
+                    && let Some(cmd) = self.viewport_command(viewport)
+                {
+                    send_conversion(cmd);
                 }
                 // Send selection rects to highlight the matched content
                 if !selection_rects.is_empty() {
@@ -6928,10 +6928,10 @@ pub(crate) fn update_pdf_toc_active(
     }
 
     let current_href = format!("pdf:page:{target_page}");
-    if let Some(info) = table_of_contents.get_current_book_info() {
-        if info.active_section.chapter_href == current_href {
-            return;
-        }
+    if let Some(info) = table_of_contents.get_current_book_info()
+        && info.active_section.chapter_href == current_href
+    {
+        return;
     }
     table_of_contents.set_active_from_hint(&current_href, None, Some(toc_height));
 }

@@ -140,10 +140,10 @@ fn cmd_print_info_pdf(file: &str) -> Result<()> {
         ("modification_date", mupdf::MetadataName::ModDate),
     ];
     for (label, key) in &fields {
-        if let Ok(value) = doc.metadata(*key) {
-            if !value.is_empty() {
-                println!("{}: {}", label, value);
-            }
+        if let Ok(value) = doc.metadata(*key)
+            && !value.is_empty()
+        {
+            println!("{}: {}", label, value);
         }
     }
     let page_count = doc.page_count().unwrap_or(0);

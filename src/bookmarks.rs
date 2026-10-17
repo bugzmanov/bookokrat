@@ -201,10 +201,10 @@ impl Bookmarks {
     pub fn save(&self) -> anyhow::Result<()> {
         match &self.file_path {
             Some(path) => {
-                if let Some(parent) = Path::new(path).parent() {
-                    if !parent.as_os_str().is_empty() {
-                        fs::create_dir_all(parent)?;
-                    }
+                if let Some(parent) = Path::new(path).parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    fs::create_dir_all(parent)?;
                 }
                 let content = serde_json::to_string_pretty(self)?;
                 fs::write(path, content)?;
@@ -345,10 +345,11 @@ impl Bookmarks {
             },
         );
 
-        if !self.books.is_empty() && self.file_path.is_some() {
-            if let Err(e) = self.save() {
-                log::error!("Failed to save bookmark: {e}");
-            }
+        if !self.books.is_empty()
+            && self.file_path.is_some()
+            && let Err(e) = self.save()
+        {
+            log::error!("Failed to save bookmark: {e}");
         }
     }
 

@@ -166,10 +166,10 @@ pub fn key_event_to_input(event: &KeyEvent) -> KeyInput {
     // crossterm reports uppercase chars as Shift+char; we normalize:
     // Shift+Char('A') stays as-is (the uppercase char IS the identity)
     // but we strip SHIFT from the modifiers since the char itself carries the case.
-    if let KeyCode::Char(c) = code {
-        if c.is_ascii_uppercase() {
-            modifiers.remove(KeyModifiers::SHIFT);
-        }
+    if let KeyCode::Char(c) = code
+        && c.is_ascii_uppercase()
+    {
+        modifiers.remove(KeyModifiers::SHIFT);
     }
 
     // BackTab is crossterm's way of saying Shift+Tab.

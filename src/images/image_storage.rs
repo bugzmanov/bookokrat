@@ -65,16 +65,16 @@ impl ImageStorage {
             let mut has_images = false;
             if let Ok(entries) = fs::read_dir(&book_dir) {
                 for entry in entries.flatten() {
-                    if entry.path().is_file() {
-                        if let Some(ext) = entry.path().extension() {
-                            let ext_str = ext.to_string_lossy().to_lowercase();
-                            if matches!(
-                                ext_str.as_str(),
-                                "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp"
-                            ) {
-                                has_images = true;
-                                break;
-                            }
+                    if entry.path().is_file()
+                        && let Some(ext) = entry.path().extension()
+                    {
+                        let ext_str = ext.to_string_lossy().to_lowercase();
+                        if matches!(
+                            ext_str.as_str(),
+                            "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp"
+                        ) {
+                            has_images = true;
+                            break;
                         }
                     }
                 }
@@ -410,13 +410,12 @@ fn normalize_path(path: &Path) -> PathBuf {
         match component {
             std::path::Component::ParentDir => {
                 // Remove the last component if it exists and isn't also a ".."
-                if !components.is_empty() {
-                    if let Some(last) = components.last() {
-                        if !matches!(last, std::path::Component::ParentDir) {
-                            components.pop();
-                            continue;
-                        }
-                    }
+                if !components.is_empty()
+                    && let Some(last) = components.last()
+                    && !matches!(last, std::path::Component::ParentDir)
+                {
+                    components.pop();
+                    continue;
                 }
                 components.push(component);
             }

@@ -624,22 +624,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         use std::collections::HashSet;
         self.current_chapter_comments.clear();
 
-        if let Some(chapter_file) = &self.current_chapter_file {
-            if let Some(comments_arc) = &self.book_comments {
-                if let Ok(comments) = comments_arc.lock() {
-                    for comment in comments.get_chapter_comments(chapter_file) {
-                        // Text reader only handles EPUB Text comments. The
-                        // slices vec is empty for PDF comments, so they
-                        // contribute nothing here — exactly what we want.
-                        let mut seen: HashSet<usize> = HashSet::new();
-                        for slice in comment.target.slices() {
-                            if seen.insert(slice.block.node_index) {
-                                self.current_chapter_comments
-                                    .entry(slice.block.node_index)
-                                    .or_default()
-                                    .push(comment.clone());
-                            }
-                        }
+        if let Some(chapter_file) = &self.current_chapter_file
+            && let Some(comments_arc) = &self.book_comments
+            && let Ok(comments) = comments_arc.lock()
+        {
+            for comment in comments.get_chapter_comments(chapter_file) {
+                // Text reader only handles EPUB Text comments. The
+                // slices vec is empty for PDF comments, so they
+                // contribute nothing here — exactly what we want.
+                let mut seen: HashSet<usize> = HashSet::new();
+                for slice in comment.target.slices() {
+                    if seen.insert(slice.block.node_index) {
+                        self.current_chapter_comments
+                            .entry(slice.block.node_index)
+                            .or_default()
+                            .push(comment.clone());
                     }
                 }
             }
@@ -648,50 +647,49 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     /// Start editing an existing comment
     fn start_editing_comment(&mut self, selection: CommentSelection) -> bool {
-        if let Some(comments_arc) = &self.book_comments {
-            if let Ok(comments) = comments_arc.lock() {
-                let comment = comments.get_comment_by_id(&selection.comment_id).cloned();
+        if let Some(comments_arc) = &self.book_comments
+            && let Ok(comments) = comments_arc.lock()
+        {
+            let comment = comments.get_comment_by_id(&selection.comment_id).cloned();
 
-                if let Some(comment) = comment {
-                    if !comment.is_comment() {
-                        return false;
-                    }
-                    let content = comment.content.clone();
-                    let comment_start_line =
-                        self.find_comment_visual_line(&comment.id).or_else(|| {
-                            self.source_lines_for_target(&comment.target)
-                                .map(|(_, last)| last)
-                        });
+            if let Some(comment) = comment {
+                if !comment.is_comment() {
+                    return false;
+                }
+                let content = comment.content.clone();
+                let comment_start_line = self.find_comment_visual_line(&comment.id).or_else(|| {
+                    self.source_lines_for_target(&comment.target)
+                        .map(|(_, last)| last)
+                });
 
-                    if let Some(start_line) = comment_start_line {
-                        let mut textarea = TextArea::default();
-                        let lines: Vec<&str> = content.split('\n').collect();
-                        for (idx, line) in lines.iter().enumerate() {
-                            textarea.insert_str(line);
-                            if idx < lines.len().saturating_sub(1) {
-                                textarea.insert_newline();
-                            }
+                if let Some(start_line) = comment_start_line {
+                    let mut textarea = TextArea::default();
+                    let lines: Vec<&str> = content.split('\n').collect();
+                    for (idx, line) in lines.iter().enumerate() {
+                        textarea.insert_str(line);
+                        if idx < lines.len().saturating_sub(1) {
+                            textarea.insert_newline();
                         }
-
-                        self.comment_input.textarea = Some(textarea);
-                        if let Some(node_index) = comment.target.node_index() {
-                            self.comment_input.target_node_index.replace(node_index);
-                        }
-                        self.comment_input.target_line = Some(start_line);
-                        self.comment_input.target_start_line = Some(start_line);
-                        self.comment_input.target_end_line = Some(start_line);
-                        self.comment_input.target = Some(comment.target.clone());
-                        self.comment_input.edit_mode = Some(CommentEditMode::Editing {
-                            comment_id: comment.id.clone(),
-                            chapter_href: comment.chapter_href.clone(),
-                            target: comment.target.clone(),
-                        });
-
-                        self.cache_generation += 1;
-
-                        self.text_selection.clear_selection();
-                        return true;
                     }
+
+                    self.comment_input.textarea = Some(textarea);
+                    if let Some(node_index) = comment.target.node_index() {
+                        self.comment_input.target_node_index.replace(node_index);
+                    }
+                    self.comment_input.target_line = Some(start_line);
+                    self.comment_input.target_start_line = Some(start_line);
+                    self.comment_input.target_end_line = Some(start_line);
+                    self.comment_input.target = Some(comment.target.clone());
+                    self.comment_input.edit_mode = Some(CommentEditMode::Editing {
+                        comment_id: comment.id.clone(),
+                        chapter_href: comment.chapter_href.clone(),
+                        target: comment.target.clone(),
+                    });
+
+                    self.cache_generation += 1;
+
+                    self.text_selection.clear_selection();
+                    return true;
                 }
             }
         }
@@ -902,19 +900,19 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let mut max_code = 0;
         let mut code_block = None;
         for idx in start.line..=end.line {
-            if let Some(line) = self.rendered_content.lines.get(idx) {
-                if let Some(meta) = &line.code_line {
-                    if code_block
-                        .as_ref()
-                        .is_none_or(|found_block| *found_block == meta.block)
-                    {
-                        code_block = Some(meta.block.clone());
-                        has_code = true;
-                        min_code = min_code.min(meta.line_index);
-                        max_code = max_code.max(meta.line_index);
-                    } else {
-                        return None;
-                    }
+            if let Some(line) = self.rendered_content.lines.get(idx)
+                && let Some(meta) = &line.code_line
+            {
+                if code_block
+                    .as_ref()
+                    .is_none_or(|found_block| *found_block == meta.block)
+                {
+                    code_block = Some(meta.block.clone());
+                    has_code = true;
+                    min_code = min_code.min(meta.line_index);
+                    max_code = max_code.max(meta.line_index);
+                } else {
+                    return None;
                 }
             }
         }
@@ -1040,37 +1038,34 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if let Some(textarea) = &self.comment_input.textarea {
             let comment_text = textarea.lines().join("\n");
 
-            if !comment_text.trim().is_empty() {
-                if let Some(target) = self.comment_input.target.clone() {
-                    if let Some(comments_arc) = &self.book_comments {
-                        if let Ok(mut comments) = comments_arc.lock() {
-                            use chrono::Utc;
+            if !comment_text.trim().is_empty()
+                && let Some(target) = self.comment_input.target.clone()
+                && let Some(comments_arc) = &self.book_comments
+                && let Ok(mut comments) = comments_arc.lock()
+            {
+                use chrono::Utc;
 
-                            if let Some(CommentEditMode::Editing { comment_id, .. }) =
-                                &self.comment_input.edit_mode
-                            {
-                                if let Err(e) =
-                                    comments.update_comment_by_id(comment_id, comment_text.clone())
-                                {
-                                    warn!("Failed to update comment: {e}");
-                                } else {
-                                    debug!("Updated comment: {comment_text}");
-                                }
-                            } else if let Some(chapter_file) = &self.current_chapter_file {
-                                let comment = Comment::new(
-                                    chapter_file.clone(),
-                                    target,
-                                    comment_text.clone(),
-                                    Utc::now(),
-                                );
+                if let Some(CommentEditMode::Editing { comment_id, .. }) =
+                    &self.comment_input.edit_mode
+                {
+                    if let Err(e) = comments.update_comment_by_id(comment_id, comment_text.clone())
+                    {
+                        warn!("Failed to update comment: {e}");
+                    } else {
+                        debug!("Updated comment: {comment_text}");
+                    }
+                } else if let Some(chapter_file) = &self.current_chapter_file {
+                    let comment = Comment::new(
+                        chapter_file.clone(),
+                        target,
+                        comment_text.clone(),
+                        Utc::now(),
+                    );
 
-                                if let Err(e) = comments.add_comment(comment) {
-                                    warn!("Failed to add comment: {e}");
-                                } else {
-                                    debug!("Saved comment: {comment_text}");
-                                }
-                            }
-                        }
+                    if let Err(e) = comments.add_comment(comment) {
+                        warn!("Failed to add comment: {e}");
+                    } else {
+                        debug!("Saved comment: {comment_text}");
                     }
                 }
             }
@@ -1093,29 +1088,27 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Returns the comment ID if any line in the selection is a comment line
     fn get_comment_at_cursor(&self) -> Option<CommentSelection> {
         // Try mouse selection first
-        if let Some((start, end)) = self.text_selection.get_selection_range() {
-            if let Some(result) = self.find_comment_in_range(start.line, end.line, &start, &end) {
-                return Some(result);
-            }
+        if let Some((start, end)) = self.text_selection.get_selection_range()
+            && let Some(result) = self.find_comment_in_range(start.line, end.line, &start, &end)
+        {
+            return Some(result);
         }
 
         // Try visual mode selection
-        if self.is_visual_mode_active() {
-            if let Some((start_line, start_col, end_line, end_col)) =
+        if self.is_visual_mode_active()
+            && let Some((start_line, start_col, end_line, end_col)) =
                 self.get_visual_selection_range()
-            {
-                let start = SelectionPoint {
-                    line: start_line,
-                    column: start_col,
-                };
-                let end = SelectionPoint {
-                    line: end_line,
-                    column: end_col,
-                };
-                if let Some(result) = self.find_comment_in_range(start_line, end_line, &start, &end)
-                {
-                    return Some(result);
-                }
+        {
+            let start = SelectionPoint {
+                line: start_line,
+                column: start_col,
+            };
+            let end = SelectionPoint {
+                line: end_line,
+                column: end_col,
+            };
+            if let Some(result) = self.find_comment_in_range(start_line, end_line, &start, &end) {
+                return Some(result);
             }
         }
 
@@ -1153,20 +1146,19 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return Some((start.line, end.line, start, end));
         }
 
-        if self.is_visual_mode_active() {
-            if let Some((start_line, start_col, end_line, end_col)) =
+        if self.is_visual_mode_active()
+            && let Some((start_line, start_col, end_line, end_col)) =
                 self.get_visual_selection_range()
-            {
-                let start = SelectionPoint {
-                    line: start_line,
-                    column: start_col,
-                };
-                let end = SelectionPoint {
-                    line: end_line,
-                    column: end_col,
-                };
-                return Some((start_line, end_line, start, end));
-            }
+        {
+            let start = SelectionPoint {
+                line: start_line,
+                column: start_col,
+            };
+            let end = SelectionPoint {
+                line: end_line,
+                column: end_col,
+            };
+            return Some((start_line, end_line, start, end));
         }
 
         if self.is_normal_mode_active() {
@@ -1317,20 +1309,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         if !is_point {
             let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
-            if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
-                if let Some(chapter_href) = self.current_chapter_file.as_deref() {
-                    if let Some(comments_arc) = self.book_comments.as_ref() {
-                        if let Ok(comments) = comments_arc.lock() {
-                            if let Some(comment) =
-                                comments.find_overlapping_highlight(chapter_href, &target)
-                            {
-                                if let Some(color) = comment.highlight_color() {
-                                    return Some((comment.id.clone(), color));
-                                }
-                            }
-                        }
-                    }
-                }
+            if let Some(target) = self.compute_selection_target(&norm_start, &norm_end)
+                && let Some(chapter_href) = self.current_chapter_file.as_deref()
+                && let Some(comments_arc) = self.book_comments.as_ref()
+                && let Ok(comments) = comments_arc.lock()
+                && let Some(comment) = comments.find_overlapping_highlight(chapter_href, &target)
+                && let Some(color) = comment.highlight_color()
+            {
+                return Some((comment.id.clone(), color));
             }
         }
 
@@ -1347,14 +1333,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
         self.text_selection.clear_selection();
 
-        if let Some(comments_arc) = self.book_comments.as_ref().cloned() {
-            if let Ok(mut comments) = comments_arc.lock() {
-                if let Err(e) = comments.set_highlight_color_by_id(comment_id, color) {
-                    warn!("Failed to recolor highlight: {e}");
-                    self.set_error_hud(format!("Failed to recolor highlight: {e}"));
-                    return;
-                }
-            }
+        if let Some(comments_arc) = self.book_comments.as_ref().cloned()
+            && let Ok(mut comments) = comments_arc.lock()
+            && let Err(e) = comments.set_highlight_color_by_id(comment_id, color)
+        {
+            warn!("Failed to recolor highlight: {e}");
+            self.set_error_hud(format!("Failed to recolor highlight: {e}"));
+            return;
         }
 
         self.rebuild_chapter_comments();
@@ -1385,12 +1370,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     return Some(CommentSelection {
                         comment_id: comment_id.clone(),
                     });
-                } else if let LineType::CodeBlock { .. } = &line.line_type {
-                    if let Some((_, target)) = self.inline_code_comment_hit(line_idx, start, end) {
-                        return Some(CommentSelection {
-                            comment_id: target.comment_id,
-                        });
-                    }
+                } else if let LineType::CodeBlock { .. } = &line.line_type
+                    && let Some((_, target)) = self.inline_code_comment_hit(line_idx, start, end)
+                {
+                    return Some(CommentSelection {
+                        comment_id: target.comment_id,
+                    });
                 }
             }
         }
@@ -1533,11 +1518,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return Ok(false);
         }
 
-        if let Some(comments_arc) = &self.book_comments {
-            if let Ok(mut comments) = comments_arc.lock() {
-                for selection in &comment_selections {
-                    let _ = comments.delete_comment_by_id(&selection.comment_id);
-                }
+        if let Some(comments_arc) = &self.book_comments
+            && let Ok(mut comments) = comments_arc.lock()
+        {
+            for selection in &comment_selections {
+                let _ = comments.delete_comment_by_id(&selection.comment_id);
             }
         }
 
@@ -1553,10 +1538,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn delete_comment_by_id(&mut self, comment_id: &str) {
-        if let Some(comments_arc) = &self.book_comments {
-            if let Ok(mut comments) = comments_arc.lock() {
-                let _ = comments.delete_comment_by_id(comment_id);
-            }
+        if let Some(comments_arc) = &self.book_comments
+            && let Ok(mut comments) = comments_arc.lock()
+        {
+            let _ = comments.delete_comment_by_id(comment_id);
         }
         self.rebuild_chapter_comments();
         self.cache_generation += 1;
@@ -1569,10 +1554,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 comment_id: line_comment_id,
                 ..
             } = &line.line_type
+                && line_comment_id == comment_id
             {
-                if line_comment_id == comment_id {
-                    return Some(idx);
-                }
+                return Some(idx);
             }
         }
         None

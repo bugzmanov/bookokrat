@@ -86,7 +86,7 @@ impl fmt::Display for YankText {
 ///
 /// let layout = Layout::default()
 ///     .direction(Direction::Vertical)
-///     .constraints([Constraint::Min(1)].as_ref());
+///     .constraints([Constraint::Min(1)]);
 /// let backend = CrosstermBackend::new(std::io::stdout());
 /// let mut term = Terminal::new(backend).unwrap();
 ///

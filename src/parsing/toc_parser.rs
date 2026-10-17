@@ -64,18 +64,18 @@ impl TocParser {
 
     /// Find `<nav epub:type="toc">` (matching the `toc` token in the type list).
     fn find_toc_nav(node: &Rc<Node>) -> Option<Rc<Node>> {
-        if let NodeData::Element { name, attrs, .. } = &node.data {
-            if name.local.as_ref().eq_ignore_ascii_case("nav") {
-                let is_toc = attrs.borrow().iter().any(|a| {
-                    let n = a.name.local.as_ref();
-                    (n == "epub:type" || n.eq_ignore_ascii_case("type"))
-                        && a.value
-                            .split_ascii_whitespace()
-                            .any(|t| t.eq_ignore_ascii_case("toc"))
-                });
-                if is_toc {
-                    return Some(node.clone());
-                }
+        if let NodeData::Element { name, attrs, .. } = &node.data
+            && name.local.as_ref().eq_ignore_ascii_case("nav")
+        {
+            let is_toc = attrs.borrow().iter().any(|a| {
+                let n = a.name.local.as_ref();
+                (n == "epub:type" || n.eq_ignore_ascii_case("type"))
+                    && a.value
+                        .split_ascii_whitespace()
+                        .any(|t| t.eq_ignore_ascii_case("toc"))
+            });
+            if is_toc {
+                return Some(node.clone());
             }
         }
         for child in node.children.borrow().iter() {
@@ -89,10 +89,10 @@ impl TocParser {
     /// Find the first `<ol>` descendant of a node.
     fn find_descendant_ol(node: &Rc<Node>) -> Option<Rc<Node>> {
         for child in node.children.borrow().iter() {
-            if let NodeData::Element { name, .. } = &child.data {
-                if name.local.as_ref().eq_ignore_ascii_case("ol") {
-                    return Some(child.clone());
-                }
+            if let NodeData::Element { name, .. } = &child.data
+                && name.local.as_ref().eq_ignore_ascii_case("ol")
+            {
+                return Some(child.clone());
             }
             if let Some(found) = Self::find_descendant_ol(child) {
                 return Some(found);

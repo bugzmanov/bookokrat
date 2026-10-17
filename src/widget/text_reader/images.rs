@@ -88,13 +88,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             })
             .filter_map(|url| {
                 // Skip already loaded/loading images
-                if let Some(img) = self.embedded_images.borrow().get(&url) {
-                    if matches!(
+                if let Some(img) = self.embedded_images.borrow().get(&url)
+                    && matches!(
                         img.state,
                         ImageLoadState::Loaded { .. } | ImageLoadState::Loading
-                    ) {
-                        return None;
-                    }
+                    )
+                {
+                    return None;
                 }
 
                 let chapter_path = self.current_chapter_file.as_deref();
@@ -185,10 +185,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             self.image_picker.as_ref().map(|picker| picker.font_size())
         else {
             for (img_src, _) in images_to_load {
-                if let Some(image) = self.embedded_images.borrow_mut().get_mut(&img_src) {
-                    if matches!(image.state, ImageLoadState::NotLoaded) {
-                        image.state = ImageLoadState::Unsupported;
-                    }
+                if let Some(image) = self.embedded_images.borrow_mut().get_mut(&img_src)
+                    && matches!(image.state, ImageLoadState::NotLoaded)
+                {
+                    image.state = ImageLoadState::Unsupported;
                 }
             }
             return;

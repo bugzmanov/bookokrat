@@ -101,10 +101,10 @@ impl SyncTexScanner {
             // Input: lines can appear both before Content: and interleaved
             // between pages (pdflatex emits them lazily for \input{} files).
             if let Some(rest) = line.strip_prefix("Input:") {
-                if let Some((tag_str, path)) = rest.split_once(':') {
-                    if let Ok(tag) = tag_str.parse::<u32>() {
-                        inputs.insert(tag, path.to_string());
-                    }
+                if let Some((tag_str, path)) = rest.split_once(':')
+                    && let Ok(tag) = tag_str.parse::<u32>()
+                {
+                    inputs.insert(tag, path.to_string());
                 }
                 continue;
             }
@@ -275,16 +275,16 @@ impl SyncTexScanner {
 
         for offset in [0i32, 1, -1, 2, -2, 3, -3] {
             let target_line = (line as i32 + offset) as u32;
-            if let Some(entries) = line_map.get(&target_line) {
-                if let Some(entry) = entries.first() {
-                    return Some(ForwardResult {
-                        page: entry.page,
-                        h: entry.h,
-                        v: entry.v,
-                        width: entry.width,
-                        height: entry.height,
-                    });
-                }
+            if let Some(entries) = line_map.get(&target_line)
+                && let Some(entry) = entries.first()
+            {
+                return Some(ForwardResult {
+                    page: entry.page,
+                    h: entry.h,
+                    v: entry.v,
+                    width: entry.width,
+                    height: entry.height,
+                });
             }
         }
         None

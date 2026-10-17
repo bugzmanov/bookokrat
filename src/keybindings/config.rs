@@ -82,10 +82,10 @@ fn keybindings_config_path_display() -> String {
         return KEYBINDINGS_FILENAME.to_string();
     };
     #[cfg(unix)]
-    if let Some(home) = std::env::home_dir() {
-        if let Ok(rest) = path.strip_prefix(&home) {
-            return format!("~/{}", rest.display());
-        }
+    if let Some(home) = std::env::home_dir()
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", rest.display());
     }
     path.display().to_string()
 }
@@ -391,16 +391,15 @@ fn write_template_if_missing(path: &PathBuf) {
     if path.exists() {
         return;
     }
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                warn!(
-                    "Failed to create keybindings config dir {}: {e}",
-                    parent.display()
-                );
-                return;
-            }
-        }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(
+            "Failed to create keybindings config dir {}: {e}",
+            parent.display()
+        );
+        return;
     }
     match std::fs::write(path, USER_STUB) {
         Ok(_) => info!("Wrote keybindings stub to {}", path.display()),

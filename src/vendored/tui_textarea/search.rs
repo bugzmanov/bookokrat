@@ -51,11 +51,11 @@ impl Search {
 
         // Search current line after cursor
         let start_col = if match_cursor { col } else { col + 1 };
-        if let Some((i, _)) = current_line.char_indices().nth(start_col) {
-            if let Some(m) = pat.find_at(current_line, i) {
-                let col = start_col + current_line[i..m.start()].chars().count();
-                return Some((row, col));
-            }
+        if let Some((i, _)) = current_line.char_indices().nth(start_col)
+            && let Some(m) = pat.find_at(current_line, i)
+        {
+            let col = start_col + current_line[i..m.start()].chars().count();
+            return Some((row, col));
         }
 
         // Search lines after cursor
@@ -108,15 +108,14 @@ impl Search {
         // Search current line before cursor
         if col > 0 || match_cursor {
             let start_col = if match_cursor { col } else { col - 1 };
-            if let Some((i, _)) = current_line.char_indices().nth(start_col) {
-                if let Some(m) = pat
+            if let Some((i, _)) = current_line.char_indices().nth(start_col)
+                && let Some(m) = pat
                     .find_iter(current_line)
                     .take_while(|m| m.start() <= i)
                     .last()
-                {
-                    let col = current_line[..m.start()].chars().count();
-                    return Some((row, col));
-                }
+            {
+                let col = current_line[..m.start()].chars().count();
+                return Some((row, col));
             }
         }
 
@@ -137,15 +136,14 @@ impl Search {
         }
 
         // Search current line after cursor
-        if let Some((i, _)) = current_line.char_indices().nth(col) {
-            if let Some(m) = pat
+        if let Some((i, _)) = current_line.char_indices().nth(col)
+            && let Some(m) = pat
                 .find_iter(current_line)
                 .skip_while(|m| m.start() < i)
                 .last()
-            {
-                let col = col + current_line[i..m.start()].chars().count();
-                return Some((row, col));
-            }
+        {
+            let col = col + current_line[i..m.start()].chars().count();
+            return Some((row, col));
         }
 
         None

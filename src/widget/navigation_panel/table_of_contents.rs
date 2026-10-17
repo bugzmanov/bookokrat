@@ -116,10 +116,10 @@ impl TableOfContents {
     /// Update book info while preserving expansion states from existing ToC items
     pub fn update_current_book_info_preserve_state(&mut self, mut new_book_info: CurrentBookInfo) {
         // If we have existing book info with the same ToC structure, preserve expansion states
-        if let Some(ref current_info) = self.current_book_info {
-            if current_info.path == new_book_info.path {
-                Self::copy_expansion_states(&current_info.toc_items, &mut new_book_info.toc_items);
-            }
+        if let Some(ref current_info) = self.current_book_info
+            && current_info.path == new_book_info.path
+        {
+            Self::copy_expansion_states(&current_info.toc_items, &mut new_book_info.toc_items);
         }
         self.current_book_info = Some(new_book_info);
     }
@@ -182,10 +182,10 @@ impl TableOfContents {
         if let Some(idx) = active_index {
             let index_with_header = idx + 1;
             self.active_item_index = Some(index_with_header);
-            if let Some(height) = viewport_height.or(Some(self.last_viewport_height)) {
-                if height > 0 {
-                    self.ensure_item_visible(index_with_header, height);
-                }
+            if let Some(height) = viewport_height.or(Some(self.last_viewport_height))
+                && height > 0
+            {
+                self.ensure_item_visible(index_with_header, height);
             }
         }
     }
@@ -211,12 +211,12 @@ impl TableOfContents {
         for item in items {
             if let Some(item_href) = item.href() {
                 let item_base = ActiveSection::base_href(item_href);
-                if item_base == target_base {
-                    if let Some(anchor) = item.anchor() {
-                        let normalized = ActiveSection::normalize_anchor(anchor);
-                        if !output.contains(&normalized) {
-                            output.push(normalized);
-                        }
+                if item_base == target_base
+                    && let Some(anchor) = item.anchor()
+                {
+                    let normalized = ActiveSection::normalize_anchor(anchor);
+                    if !output.contains(&normalized) {
+                        output.push(normalized);
                     }
                 }
             }
@@ -324,11 +324,11 @@ impl TableOfContents {
     fn section_target_segment(title: &str, href: Option<&str>, anchor: Option<&str>) -> String {
         if let Some(href) = href {
             let mut segment = format!("href:{href}");
-            if let Some(anchor) = anchor {
-                if !anchor.is_empty() {
-                    segment.push('#');
-                    segment.push_str(anchor);
-                }
+            if let Some(anchor) = anchor
+                && !anchor.is_empty()
+            {
+                segment.push('#');
+                segment.push_str(anchor);
             }
             segment
         } else {
@@ -343,8 +343,7 @@ impl TableOfContents {
             if let Some(old_item) = old_items
                 .iter()
                 .find(|old| old.title() == new_item.title() && old.href() == new_item.href())
-            {
-                if let (
+                && let (
                     TocItem::Section {
                         is_expanded: old_expanded,
                         children: old_children,
@@ -356,11 +355,10 @@ impl TableOfContents {
                         ..
                     },
                 ) = (old_item, new_item)
-                {
-                    *new_expanded = *old_expanded;
-                    // Recursively copy expansion states for children
-                    Self::copy_expansion_states(old_children, new_children);
-                }
+            {
+                *new_expanded = *old_expanded;
+                // Recursively copy expansion states for children
+                Self::copy_expansion_states(old_children, new_children);
             }
         }
     }
@@ -379,16 +377,15 @@ impl TableOfContents {
             self.manual_navigation = self.manual_navigation_cooldown > 0;
         }
 
-        if let Some(ref book_info) = self.current_book_info {
-            if let Some(active_index) =
+        if let Some(ref book_info) = self.current_book_info
+            && let Some(active_index) =
                 self.find_active_item_index(&book_info.toc_items, active_section)
-            {
-                let active_index_with_header = active_index + 1;
-                self.active_item_index = Some(active_index_with_header);
+        {
+            let active_index_with_header = active_index + 1;
+            self.active_item_index = Some(active_index_with_header);
 
-                if !self.manual_navigation && self.manual_navigation_cooldown == 0 {
-                    self.ensure_item_visible(active_index_with_header, viewport_height);
-                }
+            if !self.manual_navigation && self.manual_navigation_cooldown == 0 {
+                self.ensure_item_visible(active_index_with_header, viewport_height);
             }
         }
     }
@@ -428,14 +425,12 @@ impl TableOfContents {
                 is_expanded,
                 ..
             } = item
+                && *is_expanded
             {
-                if *is_expanded {
-                    if let Some(child_index) = self.find_active_item_index(children, active_section)
-                    {
-                        return Some(current_index + child_index);
-                    }
-                    current_index += Self::count_visible_toc_items(children);
+                if let Some(child_index) = self.find_active_item_index(children, active_section) {
+                    return Some(current_index + child_index);
                 }
+                current_index += Self::count_visible_toc_items(children);
             }
         }
 
@@ -556,57 +551,53 @@ impl TableOfContents {
 
     /// Toggle expansion state of the currently selected item if it's a section
     pub fn toggle_selected_expansion(&mut self) {
-        if let Some(ref mut current_book_info) = self.current_book_info {
-            if self.selected_index > 0 {
-                // Subtract 1 to account for the back button
-                let target_index = self.selected_index - 1;
-                Self::toggle_expansion_at_index(
-                    &mut current_book_info.toc_items,
-                    target_index,
-                    &mut 0,
-                );
-                // Set cooldown to prevent viewport jumping
-                self.manual_navigation = true;
-                self.manual_navigation_cooldown = 5;
-            }
+        if let Some(ref mut current_book_info) = self.current_book_info
+            && self.selected_index > 0
+        {
+            // Subtract 1 to account for the back button
+            let target_index = self.selected_index - 1;
+            Self::toggle_expansion_at_index(&mut current_book_info.toc_items, target_index, &mut 0);
+            // Set cooldown to prevent viewport jumping
+            self.manual_navigation = true;
+            self.manual_navigation_cooldown = 5;
         }
     }
 
     /// Collapse/fold the currently selected item if it's an expanded section
     pub fn collapse_selected(&mut self) {
-        if let Some(ref mut current_book_info) = self.current_book_info {
-            if self.selected_index > 0 {
-                // Subtract 1 to account for the back button
-                let target_index = self.selected_index - 1;
-                Self::set_expansion_at_index(
-                    &mut current_book_info.toc_items,
-                    target_index,
-                    &mut 0,
-                    false,
-                );
-                // Set cooldown to prevent viewport jumping
-                self.manual_navigation = true;
-                self.manual_navigation_cooldown = 5;
-            }
+        if let Some(ref mut current_book_info) = self.current_book_info
+            && self.selected_index > 0
+        {
+            // Subtract 1 to account for the back button
+            let target_index = self.selected_index - 1;
+            Self::set_expansion_at_index(
+                &mut current_book_info.toc_items,
+                target_index,
+                &mut 0,
+                false,
+            );
+            // Set cooldown to prevent viewport jumping
+            self.manual_navigation = true;
+            self.manual_navigation_cooldown = 5;
         }
     }
 
     /// Expand/unfold the currently selected item if it's a collapsed section
     pub fn expand_selected(&mut self) {
-        if let Some(ref mut current_book_info) = self.current_book_info {
-            if self.selected_index > 0 {
-                // Subtract 1 to account for the back button
-                let target_index = self.selected_index - 1;
-                Self::set_expansion_at_index(
-                    &mut current_book_info.toc_items,
-                    target_index,
-                    &mut 0,
-                    true,
-                );
-                // Set cooldown to prevent viewport jumping
-                self.manual_navigation = true;
-                self.manual_navigation_cooldown = 5;
-            }
+        if let Some(ref mut current_book_info) = self.current_book_info
+            && self.selected_index > 0
+        {
+            // Subtract 1 to account for the back button
+            let target_index = self.selected_index - 1;
+            Self::set_expansion_at_index(
+                &mut current_book_info.toc_items,
+                target_index,
+                &mut 0,
+                true,
+            );
+            // Set cooldown to prevent viewport jumping
+            self.manual_navigation = true;
+            self.manual_navigation_cooldown = 5;
         }
     }
 
@@ -749,29 +740,28 @@ impl TableOfContents {
                 if new_index > 0 {
                     // Skip the "Books List" item at index 0
                     let toc_index = new_index - 1;
-                    if let Some(ref current_book_info) = self.current_book_info {
-                        if let Some((item, indent_level)) =
+                    if let Some(ref current_book_info) = self.current_book_info
+                        && let Some((item, indent_level)) =
                             Self::get_toc_item_with_indent(&current_book_info.toc_items, toc_index)
-                        {
-                            // Check if this is a section with an arrow
-                            if matches!(item, TocItem::Section { .. }) {
-                                // Calculate arrow position: border + indent spaces + 1 for arrow
-                                // Each indent level adds 2 spaces
-                                let arrow_x = area.x + 1 + ((indent_level + 1) * 2) as u16;
+                    {
+                        // Check if this is a section with an arrow
+                        if matches!(item, TocItem::Section { .. }) {
+                            // Calculate arrow position: border + indent spaces + 1 for arrow
+                            // Each indent level adds 2 spaces
+                            let arrow_x = area.x + 1 + ((indent_level + 1) * 2) as u16;
 
-                                // Check if click is on or near the arrow (±1 position for error margin)
-                                if x >= arrow_x.saturating_sub(1) && x <= arrow_x + 1 {
-                                    // Toggle expansion instead of selecting
-                                    Self::toggle_expansion_at_index(
-                                        &mut self.current_book_info.as_mut().unwrap().toc_items,
-                                        toc_index,
-                                        &mut 0,
-                                    );
-                                    // Set cooldown to prevent viewport jumping
-                                    self.manual_navigation = true;
-                                    self.manual_navigation_cooldown = 5;
-                                    return MouseClickOutcome::ExpansionToggled;
-                                }
+                            // Check if click is on or near the arrow (±1 position for error margin)
+                            if x >= arrow_x.saturating_sub(1) && x <= arrow_x + 1 {
+                                // Toggle expansion instead of selecting
+                                Self::toggle_expansion_at_index(
+                                    &mut self.current_book_info.as_mut().unwrap().toc_items,
+                                    toc_index,
+                                    &mut 0,
+                                );
+                                // Set cooldown to prevent viewport jumping
+                                self.manual_navigation = true;
+                                self.manual_navigation_cooldown = 5;
+                                return MouseClickOutcome::ExpansionToggled;
                             }
                         }
                     }
@@ -835,15 +825,15 @@ impl TableOfContents {
                     is_expanded,
                     ..
                 } => {
-                    if *is_expanded {
-                        if let Some(result) = Self::get_toc_item_with_indent_helper(
+                    if *is_expanded
+                        && let Some(result) = Self::get_toc_item_with_indent_helper(
                             children,
                             target_index,
                             current_index,
                             indent_level + 1,
-                        ) {
-                            return Some(result);
-                        }
+                        )
+                    {
+                        return Some(result);
                     }
                 }
                 TocItem::Chapter { .. } => {}
@@ -875,14 +865,14 @@ impl TableOfContents {
                     is_expanded,
                     ..
                 } => {
-                    if *is_expanded {
-                        if let Some(child_item) = Self::get_toc_item_by_index_helper(
+                    if *is_expanded
+                        && let Some(child_item) = Self::get_toc_item_by_index_helper(
                             children,
                             target_index,
                             current_index,
-                        ) {
-                            return Some(child_item);
-                        }
+                        )
+                    {
+                        return Some(child_item);
                     }
                 }
                 TocItem::Chapter { .. } => {}
@@ -1102,11 +1092,10 @@ impl TableOfContents {
             is_expanded,
             ..
         } = item
+            && !is_expanded
         {
-            if !is_expanded {
-                // Section is collapsed - check if active item is inside
-                return self.contains_active_item(children, active_section);
-            }
+            // Section is collapsed - check if active item is inside
+            return self.contains_active_item(children, active_section);
         }
 
         false
@@ -1121,10 +1110,10 @@ impl TableOfContents {
             }
 
             // Recursively check children
-            if let TocItem::Section { children, .. } = item {
-                if self.contains_active_item(children, active_section) {
-                    return true;
-                }
+            if let TocItem::Section { children, .. } = item
+                && self.contains_active_item(children, active_section)
+            {
+                return true;
             }
         }
         false

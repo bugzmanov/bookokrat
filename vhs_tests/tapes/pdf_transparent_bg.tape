@@ -1,6 +1,7 @@
 # pdf_transparent_bg.tape
 about Transparent UI background (Settings > Themes > Background > Transparent) on an ordinary UNPAINTED page with a bitmap image (vhs_transparent.pdf; vhs_viewmodes.pdf paints an explicit white rect and cannot show this). Kitty only. With theming ON the terminal shows through the paper; toggling theming OFF (I) must bring back an opaque white page. Regression for #206.
 
+terminal kitty
 pdf tests/testdata/vhs_transparent.pdf
 
 wait 1000

@@ -138,40 +138,38 @@ impl BookImages {
 
         if let Some((svg_data, resources_dir)) =
             self.svg_data_and_resources_dir(epub_path, image_src, chapter_path)
-        {
-            if let Some((width, height)) =
+            && let Some((width, height)) =
                 self.svg_intrinsic_size(&svg_data, resources_dir.as_deref())
-            {
-                let target_height_in_pixels = target_height_cells as u32 * cell_height as u32;
-                let padding = Self::SVG_PADDING_PX;
-                let inner_height = target_height_in_pixels.saturating_sub(padding * 2);
-                let inner_max_width = max_width_in_pixels.saturating_sub(padding * 2);
-                if inner_height == 0 || inner_max_width == 0 {
-                    warn!("SVG target size too small for padding: {image_src}");
-                    return None;
-                }
-
-                let scale = (inner_height as f32 / height as f32)
-                    .min(inner_max_width as f32 / width as f32);
-                let inner_width = ((width as f32 * scale) as u32).max(1);
-                let inner_height = ((height as f32 * scale) as u32).max(1);
-                let new_width = inner_width + padding * 2;
-                let new_height = inner_height + padding * 2;
-                let width_cells = (new_width as f32 / cell_width as f32).ceil() as u16;
-                let height_cells = (new_height as f32 / cell_height as f32).ceil() as u16;
-
-                if let Some(rendered) = self.render_svg_to_image(
-                    image_src,
-                    &svg_data,
-                    resources_dir.as_deref(),
-                    Some((new_width, new_height)),
-                ) {
-                    return Some((rendered, width_cells, height_cells.min(target_height_cells)));
-                }
-
-                warn!("Failed to render SVG image: {image_src}");
+        {
+            let target_height_in_pixels = target_height_cells as u32 * cell_height as u32;
+            let padding = Self::SVG_PADDING_PX;
+            let inner_height = target_height_in_pixels.saturating_sub(padding * 2);
+            let inner_max_width = max_width_in_pixels.saturating_sub(padding * 2);
+            if inner_height == 0 || inner_max_width == 0 {
+                warn!("SVG target size too small for padding: {image_src}");
                 return None;
             }
+
+            let scale =
+                (inner_height as f32 / height as f32).min(inner_max_width as f32 / width as f32);
+            let inner_width = ((width as f32 * scale) as u32).max(1);
+            let inner_height = ((height as f32 * scale) as u32).max(1);
+            let new_width = inner_width + padding * 2;
+            let new_height = inner_height + padding * 2;
+            let width_cells = (new_width as f32 / cell_width as f32).ceil() as u16;
+            let height_cells = (new_height as f32 / cell_height as f32).ceil() as u16;
+
+            if let Some(rendered) = self.render_svg_to_image(
+                image_src,
+                &svg_data,
+                resources_dir.as_deref(),
+                Some((new_width, new_height)),
+            ) {
+                return Some((rendered, width_cells, height_cells.min(target_height_cells)));
+            }
+
+            warn!("Failed to render SVG image: {image_src}");
+            return None;
         }
 
         // Get the image with chapter context
@@ -376,11 +374,11 @@ impl BookImages {
                 let lo = chars.next();
                 if let (Some(hi), Some(lo)) = (hi, lo) {
                     let hex = [hi, lo];
-                    if let Ok(hex_str) = std::str::from_utf8(&hex) {
-                        if let Ok(byte) = u8::from_str_radix(hex_str, 16) {
-                            out.push(byte);
-                            continue;
-                        }
+                    if let Ok(hex_str) = std::str::from_utf8(&hex)
+                        && let Ok(byte) = u8::from_str_radix(hex_str, 16)
+                    {
+                        out.push(byte);
+                        continue;
                     }
                     out.push(b'%');
                     out.push(hi);

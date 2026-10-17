@@ -95,10 +95,10 @@ fn find_first_element_matching(
     node: &Rc<markup5ever_rcdom::Node>,
     predicate: &impl Fn(&str) -> bool,
 ) -> Option<Rc<markup5ever_rcdom::Node>> {
-    if let NodeData::Element { name, .. } = &node.data {
-        if predicate(name.local.as_ref()) {
-            return Some(node.clone());
-        }
+    if let NodeData::Element { name, .. } = &node.data
+        && predicate(name.local.as_ref())
+    {
+        return Some(node.clone());
     }
 
     for child in node.children.borrow().iter() {
@@ -846,43 +846,43 @@ impl HtmlToMarkdownConverter {
                 match tag_name {
                     "thead" => {
                         for thead_child in child.children.borrow().iter() {
-                            if let NodeData::Element { name, .. } = &thead_child.data {
-                                if name.local.as_ref() == "tr" {
-                                    let row = self.extract_table_row_with_rowspan(
-                                        thead_child,
-                                        &mut rowspan_tracker,
-                                    );
-                                    max_columns = max_columns.max(row.cells.len());
-                                    if header.is_none() {
-                                        header = Some(row);
-                                    } else {
-                                        // Additional thead rows go into rows
-                                        rows.push(row);
-                                    }
+                            if let NodeData::Element { name, .. } = &thead_child.data
+                                && name.local.as_ref() == "tr"
+                            {
+                                let row = self.extract_table_row_with_rowspan(
+                                    thead_child,
+                                    &mut rowspan_tracker,
+                                );
+                                max_columns = max_columns.max(row.cells.len());
+                                if header.is_none() {
+                                    header = Some(row);
+                                } else {
+                                    // Additional thead rows go into rows
+                                    rows.push(row);
                                 }
                             }
                         }
                     }
                     "tbody" => {
                         for tbody_child in child.children.borrow().iter() {
-                            if let NodeData::Element { name, .. } = &tbody_child.data {
-                                if name.local.as_ref() == "tr" {
-                                    let row = self.extract_table_row_with_rowspan(
-                                        tbody_child,
-                                        &mut rowspan_tracker,
-                                    );
-                                    max_columns = max_columns.max(row.cells.len());
+                            if let NodeData::Element { name, .. } = &tbody_child.data
+                                && name.local.as_ref() == "tr"
+                            {
+                                let row = self.extract_table_row_with_rowspan(
+                                    tbody_child,
+                                    &mut rowspan_tracker,
+                                );
+                                max_columns = max_columns.max(row.cells.len());
 
-                                    // If no header yet and this is the first row with header cells,
-                                    // treat it as the header (html5ever auto-generates tbody)
-                                    if header.is_none()
-                                        && rows.is_empty()
-                                        && row.cells.iter().any(|c| c.is_header)
-                                    {
-                                        header = Some(row);
-                                    } else {
-                                        rows.push(row);
-                                    }
+                                // If no header yet and this is the first row with header cells,
+                                // treat it as the header (html5ever auto-generates tbody)
+                                if header.is_none()
+                                    && rows.is_empty()
+                                    && row.cells.iter().any(|c| c.is_header)
+                                {
+                                    header = Some(row);
+                                } else {
+                                    rows.push(row);
                                 }
                             }
                         }
@@ -1129,22 +1129,21 @@ impl HtmlToMarkdownConverter {
                     }
                     "img" => {
                         // Skip spacer images
-                        if !self.is_spacer_image(attrs) {
-                            if let Some(src) = self.get_attr_value(attrs, "src") {
-                                let alt_text =
-                                    self.get_attr_value(attrs, "alt").unwrap_or_default();
-                                let title = self.get_attr_value(attrs, "title");
+                        if !self.is_spacer_image(attrs)
+                            && let Some(src) = self.get_attr_value(attrs, "src")
+                        {
+                            let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
+                            let title = self.get_attr_value(attrs, "title");
 
-                                let mut text = Text::default();
-                                text.push_inline(Inline::Image {
-                                    alt_text,
-                                    url: src,
-                                    title,
-                                });
+                            let mut text = Text::default();
+                            text.push_inline(Inline::Image {
+                                alt_text,
+                                url: src,
+                                title,
+                            });
 
-                                let para = Block::Paragraph { content: text };
-                                document.blocks.push(Node::new(para, 0..0));
-                            }
+                            let para = Block::Paragraph { content: text };
+                            document.blocks.push(Node::new(para, 0..0));
                         }
                     }
                     "table" => {
@@ -1199,17 +1198,17 @@ impl HtmlToMarkdownConverter {
                         }
                         "img" => {
                             // Skip spacer images
-                            if !self.is_spacer_image(attrs) {
-                                if let Some(src) = self.get_attr_value(attrs, "src") {
-                                    let alt_text =
-                                        self.get_attr_value(attrs, "alt").unwrap_or_default();
-                                    let title = self.get_attr_value(attrs, "title");
-                                    current_text.push_inline(Inline::Image {
-                                        alt_text,
-                                        url: src,
-                                        title,
-                                    });
-                                }
+                            if !self.is_spacer_image(attrs)
+                                && let Some(src) = self.get_attr_value(attrs, "src")
+                            {
+                                let alt_text =
+                                    self.get_attr_value(attrs, "alt").unwrap_or_default();
+                                let title = self.get_attr_value(attrs, "title");
+                                current_text.push_inline(Inline::Image {
+                                    alt_text,
+                                    url: src,
+                                    title,
+                                });
                             }
                         }
                         "table" => {
@@ -1280,43 +1279,43 @@ impl HtmlToMarkdownConverter {
                 match tag_name {
                     "thead" => {
                         for thead_child in child.children.borrow().iter() {
-                            if let NodeData::Element { name, .. } = &thead_child.data {
-                                if name.local.as_ref() == "tr" {
-                                    let row = self.extract_table_row_with_rowspan(
-                                        thead_child,
-                                        &mut rowspan_tracker,
-                                    );
-                                    max_columns = max_columns.max(row.cells.len());
-                                    if header.is_none() {
-                                        header = Some(row);
-                                    } else {
-                                        // Additional thead rows go into rows
-                                        rows.push(row);
-                                    }
+                            if let NodeData::Element { name, .. } = &thead_child.data
+                                && name.local.as_ref() == "tr"
+                            {
+                                let row = self.extract_table_row_with_rowspan(
+                                    thead_child,
+                                    &mut rowspan_tracker,
+                                );
+                                max_columns = max_columns.max(row.cells.len());
+                                if header.is_none() {
+                                    header = Some(row);
+                                } else {
+                                    // Additional thead rows go into rows
+                                    rows.push(row);
                                 }
                             }
                         }
                     }
                     "tbody" => {
                         for tbody_child in child.children.borrow().iter() {
-                            if let NodeData::Element { name, .. } = &tbody_child.data {
-                                if name.local.as_ref() == "tr" {
-                                    let row = self.extract_table_row_with_rowspan(
-                                        tbody_child,
-                                        &mut rowspan_tracker,
-                                    );
-                                    max_columns = max_columns.max(row.cells.len());
+                            if let NodeData::Element { name, .. } = &tbody_child.data
+                                && name.local.as_ref() == "tr"
+                            {
+                                let row = self.extract_table_row_with_rowspan(
+                                    tbody_child,
+                                    &mut rowspan_tracker,
+                                );
+                                max_columns = max_columns.max(row.cells.len());
 
-                                    // If no header yet and this is the first row with header cells,
-                                    // treat it as the header (html5ever auto-generates tbody)
-                                    if header.is_none()
-                                        && rows.is_empty()
-                                        && row.cells.iter().any(|c| c.is_header)
-                                    {
-                                        header = Some(row);
-                                    } else {
-                                        rows.push(row);
-                                    }
+                                // If no header yet and this is the first row with header cells,
+                                // treat it as the header (html5ever auto-generates tbody)
+                                if header.is_none()
+                                    && rows.is_empty()
+                                    && row.cells.iter().any(|c| c.is_header)
+                                {
+                                    header = Some(row);
+                                } else {
+                                    rows.push(row);
                                 }
                             }
                         }
@@ -1553,22 +1552,21 @@ impl HtmlToMarkdownConverter {
                         }
                     }
                     "img" => {
-                        if !self.is_spacer_image(attrs) {
-                            if let Some(src) = self.get_attr_value(attrs, "src") {
-                                let alt_text =
-                                    self.get_attr_value(attrs, "alt").unwrap_or_default();
-                                let title = self.get_attr_value(attrs, "title");
+                        if !self.is_spacer_image(attrs)
+                            && let Some(src) = self.get_attr_value(attrs, "src")
+                        {
+                            let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
+                            let title = self.get_attr_value(attrs, "title");
 
-                                let mut text = Text::default();
-                                text.push_inline(Inline::Image {
-                                    alt_text,
-                                    url: src,
-                                    title,
-                                });
+                            let mut text = Text::default();
+                            text.push_inline(Inline::Image {
+                                alt_text,
+                                url: src,
+                                title,
+                            });
 
-                                let para = Block::Paragraph { content: text };
-                                document.blocks.push(Node::new(para, 0..0));
-                            }
+                            let para = Block::Paragraph { content: text };
+                            document.blocks.push(Node::new(para, 0..0));
                         }
                     }
                     "ul" | "ol" => {
@@ -1959,12 +1957,12 @@ impl HtmlToMarkdownConverter {
                 let tag_name = name.local.as_ref();
                 match tag_name {
                     "dt" => {
-                        if let Some(term) = current_term.take() {
-                            if !current_definitions.is_empty() {
-                                definition_items
-                                    .push(DefinitionListItem::new(term, current_definitions));
-                                current_definitions = Vec::new();
-                            }
+                        if let Some(term) = current_term.take()
+                            && !current_definitions.is_empty()
+                        {
+                            definition_items
+                                .push(DefinitionListItem::new(term, current_definitions));
+                            current_definitions = Vec::new();
                         }
 
                         let term_content = self.extract_formatted_content(child);
@@ -1983,10 +1981,10 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        if let Some(term) = current_term {
-            if !current_definitions.is_empty() {
-                definition_items.push(DefinitionListItem::new(term, current_definitions));
-            }
+        if let Some(term) = current_term
+            && !current_definitions.is_empty()
+        {
+            definition_items.push(DefinitionListItem::new(term, current_definitions));
         }
 
         if !definition_items.is_empty() {
@@ -2631,14 +2629,12 @@ impl HtmlToMarkdownConverter {
             heading_emitted = true;
         }
 
-        if !heading_emitted {
-            if let Some(id_value) = id {
-                if let Some(first) = result.first_mut() {
-                    if first.id.is_none() {
-                        first.id = Some(id_value);
-                    }
-                }
-            }
+        if !heading_emitted
+            && let Some(id_value) = id
+            && let Some(first) = result.first_mut()
+            && first.id.is_none()
+        {
+            first.id = Some(id_value);
         }
 
         result
@@ -2768,10 +2764,10 @@ impl HtmlToMarkdownConverter {
 
     fn clear_code_style(text: &mut Text) {
         for item in text.iter_mut() {
-            if let TextOrInline::Text(node) = item {
-                if matches!(node.style, Some(Style::Code)) {
-                    node.style = None;
-                }
+            if let TextOrInline::Text(node) = item
+                && matches!(node.style, Some(Style::Code))
+            {
+                node.style = None;
             }
         }
     }
@@ -2887,20 +2883,20 @@ impl HtmlToMarkdownConverter {
             return None;
         }
 
-        if let Some(start_idx) = svg_xml.find("<svg") {
-            if let Some(tag_end) = svg_xml[start_idx..].find('>') {
-                let tag_end_idx = start_idx + tag_end;
-                let start_tag = &svg_xml[start_idx..tag_end_idx];
-                let mut insert = String::new();
-                if !start_tag.contains("xmlns=") {
-                    insert.push_str(" xmlns=\"http://www.w3.org/2000/svg\"");
-                }
-                if start_tag.contains("xlink:") && !start_tag.contains("xmlns:xlink=") {
-                    insert.push_str(" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
-                }
-                if !insert.is_empty() {
-                    svg_xml.insert_str(tag_end_idx, &insert);
-                }
+        if let Some(start_idx) = svg_xml.find("<svg")
+            && let Some(tag_end) = svg_xml[start_idx..].find('>')
+        {
+            let tag_end_idx = start_idx + tag_end;
+            let start_tag = &svg_xml[start_idx..tag_end_idx];
+            let mut insert = String::new();
+            if !start_tag.contains("xmlns=") {
+                insert.push_str(" xmlns=\"http://www.w3.org/2000/svg\"");
+            }
+            if start_tag.contains("xlink:") && !start_tag.contains("xmlns:xlink=") {
+                insert.push_str(" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
+            }
+            if !insert.is_empty() {
+                svg_xml.insert_str(tag_end_idx, &insert);
             }
         }
 

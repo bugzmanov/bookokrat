@@ -266,28 +266,28 @@ pub fn current_theme() -> &'static Base16Palette {
         let custom_index = index - builtin_count;
 
         // Check if we already have this palette cached
-        if let Ok(cache) = CUSTOM_PALETTE_CACHE.read() {
-            if let Some(palette) = cache.get(custom_index) {
-                return palette;
-            }
+        if let Ok(cache) = CUSTOM_PALETTE_CACHE.read()
+            && let Some(palette) = cache.get(custom_index)
+        {
+            return palette;
         }
 
         // Get the custom theme palette and leak it for static lifetime
-        if let Ok(themes) = CUSTOM_THEMES.read() {
-            if let Some(theme) = themes.get(custom_index) {
-                let palette = Box::new(theme.palette.clone());
-                let static_palette: &'static Base16Palette = Box::leak(palette);
+        if let Ok(themes) = CUSTOM_THEMES.read()
+            && let Some(theme) = themes.get(custom_index)
+        {
+            let palette = Box::new(theme.palette.clone());
+            let static_palette: &'static Base16Palette = Box::leak(palette);
 
-                // Cache it
-                if let Ok(mut cache) = CUSTOM_PALETTE_CACHE.write() {
-                    while cache.len() <= custom_index {
-                        cache.push(&OCEANIC_NEXT_PALETTE);
-                    }
-                    cache[custom_index] = static_palette;
+            // Cache it
+            if let Ok(mut cache) = CUSTOM_PALETTE_CACHE.write() {
+                while cache.len() <= custom_index {
+                    cache.push(&OCEANIC_NEXT_PALETTE);
                 }
-
-                return static_palette;
+                cache[custom_index] = static_palette;
             }
+
+            return static_palette;
         }
 
         // Fallback to default

@@ -355,20 +355,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             current_node_anchor = generated_heading_anchor;
         }
 
-        if let Some(anchor) = current_node_anchor {
-            if initial_line_count < lines.len() {
-                if let Some(line) = lines.get_mut(initial_line_count) {
-                    line.node_anchor = Some(anchor);
-                }
-            }
+        if let Some(anchor) = current_node_anchor
+            && initial_line_count < lines.len()
+            && let Some(line) = lines.get_mut(initial_line_count)
+        {
+            line.node_anchor = Some(anchor);
         }
 
-        if let Some(idx) = node_index {
-            if start_lines_count < lines.len() {
-                if let Some(line) = lines.get_mut(start_lines_count) {
-                    line.node_index = Some(idx);
-                }
-            }
+        if let Some(idx) = node_index
+            && start_lines_count < lines.len()
+            && let Some(line) = lines.get_mut(start_lines_count)
+        {
+            line.node_index = Some(idx);
         }
     }
 
@@ -1269,10 +1267,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     has_content = true;
                 }
                 _ => {
-                    if let TextOrInline::Inline(Inline::Link { text, .. }) = item {
-                        if !Self::text_to_string(text).trim().is_empty() {
-                            has_visible_text = true;
-                        }
+                    if let TextOrInline::Inline(Inline::Link { text, .. }) = item
+                        && !Self::text_to_string(text).trim().is_empty()
+                    {
+                        has_visible_text = true;
                     }
                     // Accumulate non-image content
                     let rich_spans = self.render_text_or_inline(item, palette, is_focused);
@@ -2143,12 +2141,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         .underline_color(self.annotation_underline_color(palette))
                         .add_modifier(Modifier::UNDERLINED);
                 }
-                if highlight_counts.get(line_idx).copied().unwrap_or(0) > 0 {
-                    if let Some(color) = line_highlight_colors[line_idx] {
-                        style = style.bg(crate::annotations::highlight_background_color(
-                            color, palette,
-                        ));
-                    }
+                if highlight_counts.get(line_idx).copied().unwrap_or(0) > 0
+                    && let Some(color) = line_highlight_colors[line_idx]
+                {
+                    style = style.bg(crate::annotations::highlight_background_color(
+                        color, palette,
+                    ));
                 }
 
                 let styled_span = Span::styled(segment.clone(), style);
@@ -4547,22 +4545,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
 
             // Push final accumulated span
-            if !current_text.is_empty() {
-                if let Some(idx) = current_span_idx {
-                    let new_rich_span = match &original_rich_spans[idx] {
-                        RichSpan::Text(original_span) => {
-                            RichSpan::Text(Span::styled(current_text, original_span.style))
-                        }
-                        RichSpan::Link {
-                            span: original_span,
-                            info,
-                        } => RichSpan::Link {
-                            span: Span::styled(current_text, original_span.style),
-                            info: info.clone(),
-                        },
-                    };
-                    result_spans.push(new_rich_span);
-                }
+            if !current_text.is_empty()
+                && let Some(idx) = current_span_idx
+            {
+                let new_rich_span = match &original_rich_spans[idx] {
+                    RichSpan::Text(original_span) => {
+                        RichSpan::Text(Span::styled(current_text, original_span.style))
+                    }
+                    RichSpan::Link {
+                        span: original_span,
+                        info,
+                    } => RichSpan::Link {
+                        span: Span::styled(current_text, original_span.style),
+                        info: info.clone(),
+                    },
+                };
+                result_spans.push(new_rich_span);
             }
 
             if result_spans.is_empty() {

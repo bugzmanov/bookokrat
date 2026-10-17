@@ -10,55 +10,54 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             self.text_selection.clear_selection();
             self.exit_visual_mode();
 
-            if let Some(text_area) = self.last_inner_text_area {
-                if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                    self.set_normal_mode_cursor(line, column);
-                }
+            if let Some(text_area) = self.last_inner_text_area
+                && let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+            {
+                self.set_normal_mode_cursor(line, column);
             }
             return;
         }
 
-        if let Some(text_area) = self.last_inner_text_area {
-            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                if self.get_link_at_position(line, column).is_some() {
-                    debug!("Mouse down on link, skipping text selection");
-                    return;
-                }
-
-                self.text_selection.start_selection(line, column);
+        if let Some(text_area) = self.last_inner_text_area
+            && let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+        {
+            if self.get_link_at_position(line, column).is_some() {
+                debug!("Mouse down on link, skipping text selection");
+                return;
             }
+
+            self.text_selection.start_selection(line, column);
         }
     }
 
     pub fn handle_mouse_drag(&mut self, x: u16, y: u16) {
-        if self.is_normal_mode_active() {
-            if let Some(text_area) = self.last_inner_text_area {
-                if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                    if !self.is_image_line(line) {
-                        if self.normal_mode.visual_mode == super::VisualMode::None {
-                            if self.normal_mode.visual_anchor.is_none() {
-                                self.normal_mode.visual_anchor =
-                                    Some(self.normal_mode.cursor.clone());
-                            }
-                            self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
-                        }
-                        self.set_normal_mode_cursor(line, column);
+        if self.is_normal_mode_active()
+            && let Some(text_area) = self.last_inner_text_area
+        {
+            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+                && !self.is_image_line(line)
+            {
+                if self.normal_mode.visual_mode == super::VisualMode::None {
+                    if self.normal_mode.visual_anchor.is_none() {
+                        self.normal_mode.visual_anchor = Some(self.normal_mode.cursor.clone());
                     }
+                    self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
                 }
-
-                self.update_auto_scroll_from_drag(y, text_area);
-                return;
+                self.set_normal_mode_cursor(line, column);
             }
+
+            self.update_auto_scroll_from_drag(y, text_area);
+            return;
         }
 
-        if self.text_selection.is_selecting {
-            if let Some(text_area) = self.last_inner_text_area {
-                if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                    self.text_selection.update_selection(line, column);
-                }
-
-                self.update_auto_scroll_from_drag(y, text_area);
+        if self.text_selection.is_selecting
+            && let Some(text_area) = self.last_inner_text_area
+        {
+            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+                self.text_selection.update_selection(line, column);
             }
+
+            self.update_auto_scroll_from_drag(y, text_area);
         }
     }
 
@@ -99,11 +98,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if self.is_normal_mode_active() {
             let text_area = self.last_inner_text_area?;
 
-            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                if let Some(link) = self.get_link_at_position(line, column) {
-                    let url = link.url.clone();
-                    return Some(url);
-                }
+            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+                && let Some(link) = self.get_link_at_position(line, column)
+            {
+                let url = link.url.clone();
+                return Some(url);
             }
 
             if !self.is_visual_mode_active() {
@@ -116,12 +115,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         let text_area = self.last_inner_text_area?;
 
-        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-            if let Some(link) = self.get_link_at_position(line, column) {
-                let url = link.url.clone();
-                self.text_selection.clear_selection();
-                return Some(url);
-            }
+        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+            && let Some(link) = self.get_link_at_position(line, column)
+        {
+            let url = link.url.clone();
+            self.text_selection.clear_selection();
+            return Some(url);
         }
 
         if self.text_selection.is_selecting {
@@ -149,61 +148,60 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn handle_double_click(&mut self, x: u16, y: u16) {
         if self.is_normal_mode_active() {
-            if let Some(text_area) = self.last_inner_text_area {
-                if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                    let mut temp_selection = super::text_selection::TextSelection::new();
-                    temp_selection.select_word_at(line, column, &self.raw_text_lines);
-                    if let (Some(start), Some(end)) = (temp_selection.start, temp_selection.end) {
-                        if !self.is_image_line(start.line) {
-                            self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
-                            self.normal_mode.visual_anchor = Some(
-                                super::normal_mode::CursorPosition::new(start.line, start.column),
-                            );
-                            let end_col = end.column.saturating_sub(1);
-                            self.set_normal_mode_cursor(end.line, end_col);
-                        }
-                    }
+            if let Some(text_area) = self.last_inner_text_area
+                && let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+            {
+                let mut temp_selection = super::text_selection::TextSelection::new();
+                temp_selection.select_word_at(line, column, &self.raw_text_lines);
+                if let (Some(start), Some(end)) = (temp_selection.start, temp_selection.end)
+                    && !self.is_image_line(start.line)
+                {
+                    self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
+                    self.normal_mode.visual_anchor = Some(super::normal_mode::CursorPosition::new(
+                        start.line,
+                        start.column,
+                    ));
+                    let end_col = end.column.saturating_sub(1);
+                    self.set_normal_mode_cursor(end.line, end_col);
                 }
             }
             return;
         }
 
-        if let Some(text_area) = self.last_inner_text_area {
-            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                if line < self.raw_text_lines.len() {
-                    self.text_selection
-                        .select_word_at(line, column, &self.raw_text_lines);
-                }
-            }
+        if let Some(text_area) = self.last_inner_text_area
+            && let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+            && line < self.raw_text_lines.len()
+        {
+            self.text_selection
+                .select_word_at(line, column, &self.raw_text_lines);
         }
     }
 
     pub fn handle_triple_click(&mut self, x: u16, y: u16) {
         if self.is_normal_mode_active() {
-            if let Some(text_area) = self.last_inner_text_area {
-                if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                    let mut temp_selection = super::text_selection::TextSelection::new();
-                    temp_selection.select_paragraph_at(line, column, &self.raw_text_lines);
-                    if let (Some(start), Some(end)) = (temp_selection.start, temp_selection.end) {
-                        if !self.is_image_line(start.line) {
-                            self.normal_mode.visual_mode = super::VisualMode::LineWise;
-                            self.normal_mode.visual_anchor =
-                                Some(super::normal_mode::CursorPosition::new(start.line, 0));
-                            self.set_normal_mode_cursor(end.line, 0);
-                        }
-                    }
+            if let Some(text_area) = self.last_inner_text_area
+                && let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+            {
+                let mut temp_selection = super::text_selection::TextSelection::new();
+                temp_selection.select_paragraph_at(line, column, &self.raw_text_lines);
+                if let (Some(start), Some(end)) = (temp_selection.start, temp_selection.end)
+                    && !self.is_image_line(start.line)
+                {
+                    self.normal_mode.visual_mode = super::VisualMode::LineWise;
+                    self.normal_mode.visual_anchor =
+                        Some(super::normal_mode::CursorPosition::new(start.line, 0));
+                    self.set_normal_mode_cursor(end.line, 0);
                 }
             }
             return;
         }
 
-        if let Some(text_area) = self.last_inner_text_area {
-            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                if line < self.raw_text_lines.len() {
-                    self.text_selection
-                        .select_paragraph_at(line, column, &self.raw_text_lines);
-                }
-            }
+        if let Some(text_area) = self.last_inner_text_area
+            && let Some((line, column)) = self.screen_to_text_coords(x, y, text_area)
+            && line < self.raw_text_lines.len()
+        {
+            self.text_selection
+                .select_paragraph_at(line, column, &self.raw_text_lines);
         }
     }
 

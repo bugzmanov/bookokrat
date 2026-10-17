@@ -192,11 +192,11 @@ fn percent_decode(input: &str) -> String {
         if c == '%' {
             // Try to read two hex digits
             let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte as char);
-                    continue;
-                }
+            if hex.len() == 2
+                && let Ok(byte) = u8::from_str_radix(&hex, 16)
+            {
+                result.push(byte as char);
+                continue;
             }
             // If parsing failed, just keep the original %XX sequence
             result.push('%');
@@ -1283,10 +1283,10 @@ impl App {
         self.jump_list.clear();
 
         let path_buf = std::path::PathBuf::from(path);
-        if !crate::terminal::images_disabled() {
-            if let Err(e) = self.book_images.load_book(&path_buf) {
-                error!("Failed to load book in BookImages: {e}");
-            }
+        if !crate::terminal::images_disabled()
+            && let Err(e) = self.book_images.load_book(&path_buf)
+        {
+            error!("Failed to load book in BookImages: {e}");
         }
 
         // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state
@@ -1378,19 +1378,19 @@ impl App {
                 }
             }
         }
-        if bookmark_in_legacy_layout {
-            if let (Some(node), Some(Some(map))) = (
+        if bookmark_in_legacy_layout
+            && let (Some(node), Some(Some(map))) = (
                 node_to_restore,
                 analysis.dialog_anchor_maps.get(initial_chapter),
-            ) {
-                let mapped = map.map_node(node);
-                if mapped != node {
-                    info!(
-                        "Moved reading position from block {node} to {mapped} for the unmerged dialog layout"
-                    );
-                    node_to_restore = Some(mapped);
-                    moved_to_new_layout = true;
-                }
+            )
+        {
+            let mapped = map.map_node(node);
+            if mapped != node {
+                info!(
+                    "Moved reading position from block {node} to {mapped} for the unmerged dialog layout"
+                );
+                node_to_restore = Some(mapped);
+                moved_to_new_layout = true;
             }
         }
         self.text_reader
@@ -1930,14 +1930,13 @@ impl App {
                     );
 
                     // Clear the Uploaded state for this page so it gets re-converted
-                    if let Some(info) = pdf_reader.rendered.get_mut(page) {
-                        if let Some(crate::pdf::ConvertedImage::Kitty { ref img, .. }) = info.img {
-                            if img.is_uploaded() {
-                                log::debug!("Clearing evicted page {page} for re-render");
-                                info.img = None;
-                                evicted_pages.push(page);
-                            }
-                        }
+                    if let Some(info) = pdf_reader.rendered.get_mut(page)
+                        && let Some(crate::pdf::ConvertedImage::Kitty { ref img, .. }) = info.img
+                        && img.is_uploaded()
+                    {
+                        log::debug!("Clearing evicted page {page} for re-render");
+                        info.img = None;
+                        evicted_pages.push(page);
                     }
                 }
             } else {
@@ -2744,11 +2743,11 @@ impl App {
                 ) {
                     let click_x = mouse_event.column;
                     let click_y = mouse_event.row;
-                    if let Some(ref popup) = self.image_popup {
-                        if popup.is_outside_popup_area(click_x, click_y) {
-                            self.image_popup = None;
-                            self.close_popup_to_previous();
-                        }
+                    if let Some(ref popup) = self.image_popup
+                        && popup.is_outside_popup_area(click_x, click_y)
+                    {
+                        self.image_popup = None;
+                        self.close_popup_to_previous();
                     }
                     return; // Block all other interactions
                 }
@@ -2831,17 +2830,13 @@ impl App {
                             if self
                                 .book_stat
                                 .handle_mouse_click(mouse_event.column, mouse_event.row)
-                            {
-                                if let Some(chapter_index) =
+                                && let Some(chapter_index) =
                                     self.book_stat.get_selected_chapter_index()
-                                {
-                                    self.book_stat.hide();
-                                    self.set_main_panel_focus(MainPanel::Content);
-                                    if let Err(e) = self.navigate_to_chapter(chapter_index) {
-                                        error!(
-                                            "Failed to navigate to chapter {chapter_index}: {e}"
-                                        );
-                                    }
+                            {
+                                self.book_stat.hide();
+                                self.set_main_panel_focus(MainPanel::Content);
+                                if let Err(e) = self.navigate_to_chapter(chapter_index) {
+                                    error!("Failed to navigate to chapter {chapter_index}: {e}");
                                 }
                             }
                         }
@@ -2874,29 +2869,26 @@ impl App {
                                 viewer.handle_mouse_click(mouse_event.column, mouse_event.row);
                             }
                             ClickType::Double => {
-                                if viewer.handle_mouse_click(mouse_event.column, mouse_event.row) {
-                                    if let Some(entry) = viewer.selected_comment() {
-                                        let chapter_href = entry.chapter_href.clone();
-                                        let node_index =
-                                            entry.primary_comment().node_index().unwrap_or(0);
-                                        viewer.save_position();
-                                        self.comments_viewer = None;
-                                        self.close_popup_to_previous();
-                                        self.set_main_panel_focus(MainPanel::Content);
+                                if viewer.handle_mouse_click(mouse_event.column, mouse_event.row)
+                                    && let Some(entry) = viewer.selected_comment()
+                                {
+                                    let chapter_href = entry.chapter_href.clone();
+                                    let node_index =
+                                        entry.primary_comment().node_index().unwrap_or(0);
+                                    viewer.save_position();
+                                    self.comments_viewer = None;
+                                    self.close_popup_to_previous();
+                                    self.set_main_panel_focus(MainPanel::Content);
 
-                                        // Ensure the reader restores to the correct node after navigation
-                                        self.text_reader.restore_to_node_index(node_index);
+                                    // Ensure the reader restores to the correct node after navigation
+                                    self.text_reader.restore_to_node_index(node_index);
 
-                                        if let Err(e) =
-                                            self.navigate_to_chapter_by_href(&chapter_href)
-                                        {
-                                            error!(
-                                                "Failed to navigate to chapter {chapter_href}: {e}"
-                                            );
-                                            self.show_error(format!(
-                                                "Failed to navigate to comment: {e}"
-                                            ));
-                                        }
+                                    if let Err(e) = self.navigate_to_chapter_by_href(&chapter_href)
+                                    {
+                                        error!("Failed to navigate to chapter {chapter_href}: {e}");
+                                        self.show_error(format!(
+                                            "Failed to navigate to comment: {e}"
+                                        ));
                                     }
                                 }
                             }
@@ -2909,32 +2901,31 @@ impl App {
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::Settings)
                 ) {
-                    if let Some(ref popup) = self.settings_popup {
-                        if popup.is_outside_popup_area(mouse_event.column, mouse_event.row) {
-                            self.settings_popup = None;
-                            self.close_popup_to_previous();
-                            return;
-                        }
+                    if let Some(ref popup) = self.settings_popup
+                        && popup.is_outside_popup_area(mouse_event.column, mouse_event.row)
+                    {
+                        self.settings_popup = None;
+                        self.close_popup_to_previous();
+                        return;
                     }
-                    if let Some(ref mut popup) = self.settings_popup {
-                        if let Some(action) =
+                    if let Some(ref mut popup) = self.settings_popup
+                        && let Some(action) =
                             popup.handle_mouse_click(mouse_event.column, mouse_event.row)
-                        {
-                            self.handle_settings_action(action);
-                        }
+                    {
+                        self.handle_settings_action(action);
                     }
                     return;
                 }
 
                 if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
-                    if let Some(ref popup) = self.lookup_popup {
-                        if popup.is_outside_popup_area(mouse_event.column, mouse_event.row) {
-                            self.lookup_popup = None;
-                            if self.settings_popup.is_some() {
-                                self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
-                            } else {
-                                self.close_popup_to_previous();
-                            }
+                    if let Some(ref popup) = self.lookup_popup
+                        && popup.is_outside_popup_area(mouse_event.column, mouse_event.row)
+                    {
+                        self.lookup_popup = None;
+                        if self.settings_popup.is_some() {
+                            self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+                        } else {
+                            self.close_popup_to_previous();
                         }
                     }
                     return;
@@ -2974,10 +2965,10 @@ impl App {
                             {
                                 self.persist_toc_expansion_state();
                             }
-                            if outcome.handled() {
-                                if let Some(action) = self.navigation_panel.get_enter_action() {
-                                    self.handle_navigation_panel_action(action);
-                                }
+                            if outcome.handled()
+                                && let Some(action) = self.navigation_panel.get_enter_action()
+                            {
+                                self.handle_navigation_panel_action(action);
                             }
                         }
                     }
@@ -3053,15 +3044,13 @@ impl App {
                 }
 
                 let nav_panel_width = self.nav_panel_width();
-                if mouse_event.column >= nav_panel_width {
-                    if let Some(url) = self
+                if mouse_event.column >= nav_panel_width
+                    && let Some(url) = self
                         .text_reader
                         .handle_mouse_up(mouse_event.column, mouse_event.row)
-                    {
-                        if let Err(e) = self.handle_link_click(&LinkInfo::from_url(url)) {
-                            error!("Failed to handle link click: {e}");
-                        }
-                    }
+                    && let Err(e) = self.handle_link_click(&LinkInfo::from_url(url))
+                {
+                    error!("Failed to handle link click: {e}");
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -3217,12 +3206,10 @@ impl App {
             .navigation_panel
             .table_of_contents
             .get_current_book_info()
-        {
-            if let Some(index) =
+            && let Some(index) =
                 self.find_chapter_recursive(&current_book_info.toc_items, chapter_file)
-            {
-                return Some(index);
-            }
+        {
+            return Some(index);
         }
 
         // Fall back to direct spine lookup if not found in TOC
@@ -3460,16 +3447,16 @@ impl App {
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::CommentsViewer)
         ) {
-            if let Some(ref mut viewer) = self.comments_viewer {
-                if !viewer.handle_mouse_scroll(column, scroll_amount) {
-                    if scroll_amount > 0 {
-                        for _ in 0..scroll_amount.min(10) {
-                            viewer.handle_j();
-                        }
-                    } else {
-                        for _ in 0..(-scroll_amount).min(10) {
-                            viewer.handle_k();
-                        }
+            if let Some(ref mut viewer) = self.comments_viewer
+                && !viewer.handle_mouse_scroll(column, scroll_amount)
+            {
+                if scroll_amount > 0 {
+                    for _ in 0..scroll_amount.min(10) {
+                        viewer.handle_j();
+                    }
+                } else {
+                    for _ in 0..(-scroll_amount).min(10) {
+                        viewer.handle_k();
                     }
                 }
             }
@@ -3789,11 +3776,11 @@ impl App {
                 let mut jumped = None;
                 if self.current_book.as_ref().map(|x| &x.file) == Some(&path) {
                     self.save_to_jump_list();
-                    if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(chapter) {
-                        if let Err(e) = self.navigate_to_chapter(chapter) {
-                            self.show_error(format!("Failed to jump to mark: {e}"));
-                            return;
-                        }
+                    if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(chapter)
+                        && let Err(e) = self.navigate_to_chapter(chapter)
+                    {
+                        self.show_error(format!("Failed to jump to mark: {e}"));
+                        return;
                     }
                     let (node, node_offset) = self.epub_mark_position(&mark);
                     match node_offset {
@@ -3841,13 +3828,12 @@ impl App {
                     .as_ref()
                     .map(|r| r.name == path)
                     .unwrap_or(false);
-                if !same_pdf {
-                    if let Err(e) =
+                if !same_pdf
+                    && let Err(e) =
                         self.open_book_for_reading_by_path(&path, Some(OpenPosition::Page(page)))
-                    {
-                        self.show_error(format!("Failed to open '{path}': {e}"));
-                        return;
-                    }
+                {
+                    self.show_error(format!("Failed to open '{path}': {e}"));
+                    return;
                 }
                 self.apply_pdf_mark_jump(page, scroll_offset, line_idx);
             }
@@ -3961,10 +3947,10 @@ impl App {
             // be rendered yet — the converter will pick up the rects on the
             // next render via the rendering loop hook.
             let rects = pdf_reader.pending_highlight_rects();
-            if !rects.is_empty() {
-                if let Some(tx) = self.pdf_conversion_tx.as_ref() {
-                    let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(rects));
-                }
+            if !rects.is_empty()
+                && let Some(tx) = self.pdf_conversion_tx.as_ref()
+            {
+                let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(rects));
             }
         }
         self.pdf_reader = Some(pdf_reader);
@@ -3992,21 +3978,21 @@ impl App {
             )
         });
 
-        if let Some(location) = self.jump_list.jump_back(current_location) {
-            if let Err(e) = self.jump_to_location(location) {
-                error!("Failed to jump back: {e}");
-                self.show_error(format!("Failed to jump back: {e}"));
-            }
+        if let Some(location) = self.jump_list.jump_back(current_location)
+            && let Err(e) = self.jump_to_location(location)
+        {
+            error!("Failed to jump back: {e}");
+            self.show_error(format!("Failed to jump back: {e}"));
         }
     }
 
     /// Handle Ctrl+I - jump forward in history
     fn jump_forward(&mut self) {
-        if let Some(location) = self.jump_list.jump_forward() {
-            if let Err(e) = self.jump_to_location(location) {
-                error!("Failed to jump forward: {e}");
-                self.show_error(format!("Failed to jump forward: {e}"));
-            }
+        if let Some(location) = self.jump_list.jump_forward()
+            && let Err(e) = self.jump_to_location(location)
+        {
+            error!("Failed to jump forward: {e}");
+            self.show_error(format!("Failed to jump forward: {e}"));
         }
     }
 
@@ -4079,37 +4065,34 @@ impl App {
                 #[cfg(feature = "pdf")]
                 {
                     if href.starts_with("pdf:page:") {
-                        if let Some(page_str) = href.strip_prefix("pdf:page:") {
-                            if let Ok(page) = page_str.parse::<usize>() {
-                                self.navigate_pdf_to_page(page);
+                        if let Some(page_str) = href.strip_prefix("pdf:page:")
+                            && let Ok(page) = page_str.parse::<usize>()
+                        {
+                            self.navigate_pdf_to_page(page);
+                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                        }
+                        return false;
+                    } else if href.starts_with("pdf:printed:") {
+                        if let Some(printed_str) = href.strip_prefix("pdf:printed:")
+                            && let Ok(printed) = printed_str.parse::<usize>()
+                            && let Some(ref pdf_reader) = self.pdf_reader
+                        {
+                            let n_pages = pdf_reader.rendered.len();
+                            let page_idx = pdf_reader
+                                .page_numbers
+                                .map_printed_to_pdf(printed, n_pages)
+                                .or_else(|| printed.checked_sub(1).filter(|&p| p < n_pages));
+                            if let Some(page_idx) = page_idx {
+                                self.navigate_pdf_to_page(page_idx);
                                 self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                             }
                         }
                         return false;
-                    } else if href.starts_with("pdf:printed:") {
-                        if let Some(printed_str) = href.strip_prefix("pdf:printed:") {
-                            if let Ok(printed) = printed_str.parse::<usize>() {
-                                if let Some(ref pdf_reader) = self.pdf_reader {
-                                    let n_pages = pdf_reader.rendered.len();
-                                    let page_idx = pdf_reader
-                                        .page_numbers
-                                        .map_printed_to_pdf(printed, n_pages)
-                                        .or_else(|| {
-                                            printed.checked_sub(1).filter(|&p| p < n_pages)
-                                        });
-                                    if let Some(page_idx) = page_idx {
-                                        self.navigate_pdf_to_page(page_idx);
-                                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                                    }
-                                }
-                            }
-                        }
-                        return false;
                     } else if href.starts_with("pdf:external:") {
-                        if let Some(url) = href.strip_prefix("pdf:external:") {
-                            if let Err(e) = open::that(url) {
-                                error!("Failed to open external link: {e}");
-                            }
+                        if let Some(url) = href.strip_prefix("pdf:external:")
+                            && let Err(e) = open::that(url)
+                        {
+                            error!("Failed to open external link: {e}");
                         }
                         return false;
                     }
@@ -5379,23 +5362,23 @@ impl App {
                         // full-width pages can never share the window and the
                         // dual view deadlocks on [LOADING]. (Kitty scales at
                         // display time and needs no re-render.)
-                        if !pdf_reader.is_kitty {
-                            if let Some(action) = pdf_reader.reset_zoom_to_fit_width() {
-                                let _ = pdf_reader.apply_input_action(
-                                    action,
-                                    self.pdf_service.as_mut(),
-                                    self.pdf_conversion_tx.as_ref(),
-                                    &mut self.notifications,
-                                    self.current_context_override
-                                        .as_mut()
-                                        .map(LibraryContext::bookmarks_mut)
-                                        .unwrap_or_else(|| self.home_context.bookmarks_mut()),
-                                    &mut self.last_bookmark_save,
-                                    &mut self.navigation_panel.table_of_contents,
-                                    toc_height,
-                                    &self.profiler,
-                                );
-                            }
+                        if !pdf_reader.is_kitty
+                            && let Some(action) = pdf_reader.reset_zoom_to_fit_width()
+                        {
+                            let _ = pdf_reader.apply_input_action(
+                                action,
+                                self.pdf_service.as_mut(),
+                                self.pdf_conversion_tx.as_ref(),
+                                &mut self.notifications,
+                                self.current_context_override
+                                    .as_mut()
+                                    .map(LibraryContext::bookmarks_mut)
+                                    .unwrap_or_else(|| self.home_context.bookmarks_mut()),
+                                &mut self.last_bookmark_save,
+                                &mut self.navigation_panel.table_of_contents,
+                                toc_height,
+                                &self.profiler,
+                            );
                         }
                         pdf_reader.set_hud_message(
                             format!("Page layout: {}", new_mode.as_str()),
@@ -5432,10 +5415,10 @@ impl App {
             }
             Action::GoToPage => {
                 #[cfg(feature = "pdf")]
-                if self.is_pdf_mode() {
-                    if let Some(ref mut pdf_reader) = self.pdf_reader {
-                        pdf_reader.start_go_to_page_input();
-                    }
+                if self.is_pdf_mode()
+                    && let Some(ref mut pdf_reader) = self.pdf_reader
+                {
+                    pdf_reader.start_go_to_page_input();
                 }
                 true
             }
@@ -5667,10 +5650,11 @@ impl App {
     fn handle_normal_mode_count_prefix(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         use crossterm::event::KeyCode;
 
-        if let KeyCode::Char(ch) = key.code {
-            if ch.is_ascii_digit() && (ch != '0' || self.text_reader.has_pending_count()) {
-                return self.text_reader.append_count_digit(ch);
-            }
+        if let KeyCode::Char(ch) = key.code
+            && ch.is_ascii_digit()
+            && (ch != '0' || self.text_reader.has_pending_count())
+        {
+            return self.text_reader.append_count_digit(ch);
         }
 
         false
@@ -6154,10 +6138,10 @@ impl App {
                 }
             }
             Action::FollowLink => {
-                if let Some(link_info) = self.text_reader.get_link_at_cursor() {
-                    if let Err(e) = self.handle_link_click(&link_info) {
-                        error!("Failed to handle link click: {e}");
-                    }
+                if let Some(link_info) = self.text_reader.get_link_at_cursor()
+                    && let Err(e) = self.handle_link_click(&link_info)
+                {
+                    error!("Failed to handle link click: {e}");
                 }
             }
             Action::ToggleHelp => {
@@ -6204,13 +6188,13 @@ impl App {
                 self.text_reader.start_yank();
             }
             Action::ToggleRawHtml => {
-                if self.is_main_panel(MainPanel::Content) && self.current_book.is_some() {
-                    if let Some(ref mut book) = self.current_book {
-                        if let Some((raw_html, _)) = book.epub.get_current_str() {
-                            self.text_reader.set_raw_html(raw_html);
-                            self.text_reader.toggle_raw_html();
-                        }
-                    }
+                if self.is_main_panel(MainPanel::Content)
+                    && self.current_book.is_some()
+                    && let Some(ref mut book) = self.current_book
+                    && let Some((raw_html, _)) = book.epub.get_current_str()
+                {
+                    self.text_reader.set_raw_html(raw_html);
+                    self.text_reader.toggle_raw_html();
                 }
             }
             Action::SetMark => {
@@ -6262,12 +6246,11 @@ impl App {
         let _ = self.text_reader.dismiss_error_hud();
 
         // If comment input is active, route all input to the text area
-        if self.text_reader.is_comment_input_active() {
-            if let Some(input) = map_keys_to_input(key) {
-                if self.text_reader.handle_comment_input(input) {
-                    return None;
-                }
-            }
+        if self.text_reader.is_comment_input_active()
+            && let Some(input) = map_keys_to_input(key)
+            && self.text_reader.handle_comment_input(input)
+        {
+            return None;
         }
 
         // Mark mode: m<x> sets mark, `<x> jumps to mark. The next char is consumed
@@ -6523,22 +6506,20 @@ impl App {
                                         }
                                     }
                                 }
-                                if delete_success {
-                                    if let Some(pdf_reader) = self.pdf_reader.as_mut() {
-                                        pdf_reader.refresh_comment_rects();
-                                        pdf_reader.refresh_highlight_overlays();
-                                        if let Some(tx) = self.pdf_conversion_tx.as_ref() {
-                                            let _ = tx.send(
-                                                crate::pdf::ConversionCommand::UpdateComments(
-                                                    pdf_reader.comment_rects.clone(),
-                                                ),
-                                            );
-                                            let _ = tx.send(
-                                                crate::pdf::ConversionCommand::UpdateHighlights(
-                                                    pdf_reader.highlight_overlays.clone(),
-                                                ),
-                                            );
-                                        }
+                                if delete_success && let Some(pdf_reader) = self.pdf_reader.as_mut()
+                                {
+                                    pdf_reader.refresh_comment_rects();
+                                    pdf_reader.refresh_highlight_overlays();
+                                    if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+                                        let _ =
+                                            tx.send(crate::pdf::ConversionCommand::UpdateComments(
+                                                pdf_reader.comment_rects.clone(),
+                                            ));
+                                        let _ = tx.send(
+                                            crate::pdf::ConversionCommand::UpdateHighlights(
+                                                pdf_reader.highlight_overlays.clone(),
+                                            ),
+                                        );
                                     }
                                 }
                             }
@@ -6802,10 +6783,10 @@ impl App {
                     }
                     PendingYank::WaitingForG => {
                         self.text_reader.clear_count();
-                        if let KeyCode::Char('g') = key.code {
-                            if let Some(text) = self.text_reader.yank_to_document_top() {
-                                let _ = self.text_reader.copy_to_clipboard(text);
-                            }
+                        if let KeyCode::Char('g') = key.code
+                            && let Some(text) = self.text_reader.yank_to_document_top()
+                        {
+                            let _ = self.text_reader.copy_to_clipboard(text);
                         }
                         self.text_reader.clear_pending_yank();
                         return None;
@@ -6985,10 +6966,10 @@ impl App {
             match key.code {
                 KeyCode::Enter => {
                     self.text_reader.clear_count();
-                    if let Some(link_info) = self.text_reader.get_link_at_cursor() {
-                        if let Err(e) = self.handle_link_click(&link_info) {
-                            error!("Failed to handle link click: {e}");
-                        }
+                    if let Some(link_info) = self.text_reader.get_link_at_cursor()
+                        && let Err(e) = self.handle_link_click(&link_info)
+                    {
+                        error!("Failed to handle link click: {e}");
                     }
                     return None;
                 }
@@ -8017,16 +7998,15 @@ impl App {
         // reader, otherwise the PDF keymap eats the letter (e.g. `a` →
         // AddComment). Skip when a PDF text input is active so search /
         // comment editors keep their typing.
-        if let crossterm::event::Event::Key(key) = event {
-            if self.pending_mark_op.is_some()
-                && !self.pdf_text_input_active()
-                && self.handle_pending_mark_input(key)
-            {
-                return PdfEventResult {
-                    handled: true,
-                    action: None,
-                };
-            }
+        if let crossterm::event::Event::Key(key) = event
+            && self.pending_mark_op.is_some()
+            && !self.pdf_text_input_active()
+            && self.handle_pending_mark_input(key)
+        {
+            return PdfEventResult {
+                handled: true,
+                action: None,
+            };
         }
 
         let toc_height = self.get_navigation_panel_area().height as usize;
@@ -8598,10 +8578,10 @@ where
         }
 
         #[cfg(feature = "pdf")]
-        if let Some(reader) = app.pdf_reader.as_mut() {
-            if std::mem::take(&mut reader.pending_screen_refresh) {
-                app.pending_screen_refresh = true;
-            }
+        if let Some(reader) = app.pdf_reader.as_mut()
+            && std::mem::take(&mut reader.pending_screen_refresh)
+        {
+            app.pending_screen_refresh = true;
         }
 
         if app.pending_screen_refresh {

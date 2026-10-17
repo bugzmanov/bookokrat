@@ -645,46 +645,45 @@ impl MarkdownTextReader {
         self.update_image_settle_state();
 
         // Re-render when dimensions, focus, or cached content change
-        if self.last_width != width
+        if (self.last_width != width
             || self.last_focus_state != is_focused
-            || self.rendered_content.generation != self.cache_generation
+            || self.rendered_content.generation != self.cache_generation)
+            && let Some(doc) = self.markdown_document.clone()
         {
-            if let Some(doc) = self.markdown_document.clone() {
-                self.rendered_content =
-                    self.render_document_to_lines(doc.as_ref(), width, palette, is_focused);
-                self.total_wrapped_lines = self.rendered_content.total_height;
-                self.last_width = width;
-                self.last_focus_state = is_focused;
-                self.restore_reflow_anchor();
+            self.rendered_content =
+                self.render_document_to_lines(doc.as_ref(), width, palette, is_focused);
+            self.total_wrapped_lines = self.rendered_content.total_height;
+            self.last_width = width;
+            self.last_focus_state = is_focused;
+            self.restore_reflow_anchor();
 
-                if let Some((node_index, char_offset)) = self.pending_node_restore.take() {
-                    match char_offset {
-                        Some(off) => self.perform_node_position_restore(node_index, off),
-                        None => self.perform_node_restore(node_index),
+            if let Some((node_index, char_offset)) = self.pending_node_restore.take() {
+                match char_offset {
+                    Some(off) => self.perform_node_position_restore(node_index, off),
+                    None => self.perform_node_restore(node_index),
+                }
+            }
+
+            if let Some((node_index, offset, duration)) = self.pending_node_highlight.take() {
+                match offset {
+                    Some(off) => {
+                        self.flash_node_position_highlight(node_index, off, duration);
                     }
+                    None => self.flash_node_highlight(node_index, duration),
                 }
+            }
 
-                if let Some((node_index, offset, duration)) = self.pending_node_highlight.take() {
-                    match offset {
-                        Some(off) => {
-                            self.flash_node_position_highlight(node_index, off, duration);
-                        }
-                        None => self.flash_node_highlight(node_index, duration),
-                    }
+            if let Some(anchor_id) = self.pending_anchor_scroll.take() {
+                if let Some(target_line) = self.get_anchor_position(&anchor_id) {
+                    self.scroll_to_line(target_line);
+                    self.highlight_line_temporarily(target_line, Duration::from_secs(2));
+                } else {
+                    warn!("Pending anchor '{anchor_id}' not found after re-render");
                 }
+            }
 
-                if let Some(anchor_id) = self.pending_anchor_scroll.take() {
-                    if let Some(target_line) = self.get_anchor_position(&anchor_id) {
-                        self.scroll_to_line(target_line);
-                        self.highlight_line_temporarily(target_line, Duration::from_secs(2));
-                    } else {
-                        warn!("Pending anchor '{anchor_id}' not found after re-render");
-                    }
-                }
-
-                if let Some((query, node_index)) = self.pending_global_search.take() {
-                    self.activate_local_search_from_global(query, node_index);
-                }
+            if let Some((query, node_index)) = self.pending_global_search.take() {
+                self.activate_local_search_from_global(query, node_index);
             }
         }
         let title_text = if let Some(ref title) = self.chapter_title {
@@ -932,12 +931,11 @@ impl MarkdownTextReader {
             }
             self.last_rendered_image_rects = current_image_rects;
 
-            if let Some(layout) = textarea_layout {
-                if layout.draw_start_line >= col_start
-                    && layout.draw_start_line < col_start + left_rect.height as usize
-                {
-                    self.draw_comment_textarea_column(frame, layout, col_start, left_rect, palette);
-                }
+            if let Some(layout) = textarea_layout
+                && layout.draw_start_line >= col_start
+                && layout.draw_start_line < col_start + left_rect.height as usize
+            {
+                self.draw_comment_textarea_column(frame, layout, col_start, left_rect, palette);
             }
         }
 
@@ -978,12 +976,11 @@ impl MarkdownTextReader {
         };
         let visual_line_idx = line_idx.wrapping_sub(self.scroll_offset);
 
-        if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
-            if let Some(embedded_image) = self.embedded_images.borrow().get(src) {
-                if matches!(embedded_image.state, ImageLoadState::Loaded { .. }) {
-                    return Line::from("");
-                }
-            }
+        if let LineType::ImagePlaceholder { src } = &rendered_line.line_type
+            && let Some(embedded_image) = self.embedded_images.borrow().get(src)
+            && matches!(embedded_image.state, ImageLoadState::Loaded { .. })
+        {
+            return Line::from("");
         }
 
         let mut line_spans = if self.highlight_visual_line == Some(visual_line_idx) {
@@ -1035,11 +1032,11 @@ impl MarkdownTextReader {
     ) -> Vec<Line<'static>> {
         let mut visible_lines = Vec::new();
         for line_idx in col_start..col_end {
-            if let Some(insert_pos) = textarea_insert_position {
-                if line_idx == insert_pos {
-                    for _ in 0..textarea_lines_to_insert {
-                        visible_lines.push(Line::from(""));
-                    }
+            if let Some(insert_pos) = textarea_insert_position
+                && line_idx == insert_pos
+            {
+                for _ in 0..textarea_lines_to_insert {
+                    visible_lines.push(Line::from(""));
                 }
             }
 
@@ -1308,7 +1305,11 @@ impl MarkdownTextReader {
                     continue;
                 };
                 let page = start / page_height;
-                let rect = if page % 2 == 0 { left_rect } else { right_rect };
+                let rect = if page.is_multiple_of(2) {
+                    left_rect
+                } else {
+                    right_rect
+                };
                 let page_offset = start % page_height;
                 let image_cells = embedded_image.height_cells as usize;
                 let page_remaining = page_height.saturating_sub(page_offset);
@@ -1381,91 +1382,88 @@ impl MarkdownTextReader {
             let mut image_start_line = embedded_image.lines_before_image;
             let mut image_end_line = image_start_line + image_height_cells;
 
-            if let Some(insert_pos) = textarea_insert_position {
-                if image_start_line >= insert_pos {
-                    image_start_line += textarea_lines_to_insert;
-                    image_end_line += textarea_lines_to_insert;
-                }
+            if let Some(insert_pos) = textarea_insert_position
+                && image_start_line >= insert_pos
+            {
+                image_start_line += textarea_lines_to_insert;
+                image_end_line += textarea_lines_to_insert;
             }
 
-            if col_start < image_end_line && col_start + area_height > image_start_line {
-                if let ImageLoadState::Loaded {
+            if col_start < image_end_line
+                && col_start + area_height > image_start_line
+                && let ImageLoadState::Loaded {
                     ref image,
                     ref mut protocol,
                 } = embedded_image.state
-                {
-                    let scaled_image = image;
+            {
+                let scaled_image = image;
 
-                    if let Some(ref picker) = self.image_picker {
-                        let image_screen_start = image_start_line.saturating_sub(col_start);
+                if let Some(ref picker) = self.image_picker {
+                    let image_screen_start = image_start_line.saturating_sub(col_start);
 
-                        // Clip the top portion if the image starts above the column
-                        let image_top_clipped = col_start.saturating_sub(image_start_line);
+                    // Clip the top portion if the image starts above the column
+                    let image_top_clipped = col_start.saturating_sub(image_start_line);
 
-                        let visible_image_height = (image_height_cells - image_top_clipped)
-                            .min(area_height - image_screen_start);
+                    let visible_image_height = (image_height_cells - image_top_clipped)
+                        .min(area_height - image_screen_start);
 
-                        if visible_image_height > 0 {
-                            let (render_y, render_height) = if image_top_clipped > 0 {
-                                (
-                                    col_rect.y,
-                                    (image_height_cells.saturating_sub(image_top_clipped))
-                                        .min(area_height)
-                                        as u16,
-                                )
-                            } else {
-                                (
-                                    col_rect.y + image_screen_start as u16,
-                                    image_height_cells
-                                        .min(area_height.saturating_sub(image_screen_start))
-                                        as u16,
-                                )
-                            };
+                    if visible_image_height > 0 {
+                        let (render_y, render_height) = if image_top_clipped > 0 {
+                            (
+                                col_rect.y,
+                                (image_height_cells.saturating_sub(image_top_clipped))
+                                    .min(area_height) as u16,
+                            )
+                        } else {
+                            (
+                                col_rect.y + image_screen_start as u16,
+                                image_height_cells
+                                    .min(area_height.saturating_sub(image_screen_start))
+                                    as u16,
+                            )
+                        };
 
-                            // Determine the terminal width required for the pixels
-                            let (image_width_pixels, _image_height_pixels) =
-                                scaled_image.dimensions();
-                            let font_size = picker.font_size();
-                            let image_width_cells =
-                                (image_width_pixels as f32 / font_size.0 as f32).ceil() as u16;
+                        // Determine the terminal width required for the pixels
+                        let (image_width_pixels, _image_height_pixels) = scaled_image.dimensions();
+                        let font_size = picker.font_size();
+                        let image_width_cells =
+                            (image_width_pixels as f32 / font_size.0 as f32).ceil() as u16;
 
-                            // Center the image horizontally in the column
-                            let text_area_width = col_rect.width;
-                            let image_display_width = image_width_cells.min(text_area_width);
-                            let x_offset =
-                                (text_area_width.saturating_sub(image_display_width)) / 2;
+                        // Center the image horizontally in the column
+                        let text_area_width = col_rect.width;
+                        let image_display_width = image_width_cells.min(text_area_width);
+                        let x_offset = (text_area_width.saturating_sub(image_display_width)) / 2;
 
-                            let image_area = Rect {
-                                x: col_rect.x + x_offset,
-                                y: render_y,
-                                width: image_display_width,
-                                height: render_height,
-                            };
+                        let image_area = Rect {
+                            x: col_rect.x + x_offset,
+                            y: render_y,
+                            width: image_display_width,
+                            height: render_height,
+                        };
 
-                            // Render using the ratatui_image viewport for scrolling
-                            let current_font_size = picker.font_size();
-                            let y_offset_pixels =
-                                (image_top_clipped as f32 * current_font_size.1 as f32) as u32;
+                        // Render using the ratatui_image viewport for scrolling
+                        let current_font_size = picker.font_size();
+                        let y_offset_pixels =
+                            (image_top_clipped as f32 * current_font_size.1 as f32) as u32;
 
-                            let viewport_options = ViewportOptions {
-                                y_offset: y_offset_pixels,
-                                x_offset: 0, // No horizontal scrolling for now
-                                settled: self.images_render_settled(),
-                            };
+                        let viewport_options = ViewportOptions {
+                            y_offset: y_offset_pixels,
+                            x_offset: 0, // No horizontal scrolling for now
+                            settled: self.images_render_settled(),
+                        };
 
-                            if self
-                                .annotation_peek_rect()
-                                .is_some_and(|peek| peek.intersects(image_area))
-                            {
-                                continue;
-                            }
-
-                            let image_widget =
-                                StatefulImage::new().resize(Resize::Viewport(viewport_options));
-
-                            frame.render_stateful_widget(image_widget, image_area, protocol);
-                            current_image_rects.insert(src.clone(), image_area);
+                        if self
+                            .annotation_peek_rect()
+                            .is_some_and(|peek| peek.intersects(image_area))
+                        {
+                            continue;
                         }
+
+                        let image_widget =
+                            StatefulImage::new().resize(Resize::Viewport(viewport_options));
+
+                        frame.render_stateful_widget(image_widget, image_area, protocol);
+                        current_image_rects.insert(src.clone(), image_area);
                     }
                 }
             }

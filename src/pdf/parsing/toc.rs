@@ -134,51 +134,51 @@ pub struct HierarchyInferenceInfo {
 /// Extract TOC with full diagnostic information.
 pub fn extract_toc_with_diagnostics(doc: &Document, page_count: usize) -> TocDiagnostics {
     // Try metadata outlines first
-    if let Ok(outlines) = doc.outlines() {
-        if !outlines.is_empty() {
-            let mut entries = Vec::new();
-            flatten_outlines(&outlines, 0, &mut entries);
+    if let Ok(outlines) = doc.outlines()
+        && !outlines.is_empty()
+    {
+        let mut entries = Vec::new();
+        flatten_outlines(&outlines, 0, &mut entries);
 
-            let validation = compute_validation_info(&entries);
-            let validation_passed = validation.valid_percent >= 70 && entries.len() >= 3;
+        let validation = compute_validation_info(&entries);
+        let validation_passed = validation.valid_percent >= 70 && entries.len() >= 3;
 
-            let outline_info = OutlineInfo {
-                top_level_count: outlines.len(),
-                total_count: entries.len(),
-                validation_passed,
-                validation,
-            };
+        let outline_info = OutlineInfo {
+            top_level_count: outlines.len(),
+            total_count: entries.len(),
+            validation_passed,
+            validation,
+        };
 
-            if validation_passed {
-                return TocDiagnostics {
-                    source: TocSource::Metadata,
-                    outline_info: Some(outline_info),
-                    heuristics_info: None,
-                    entries,
-                };
-            }
-
-            // Outlines exist but failed validation - try heuristics
-            let (heuristics_info, heuristic_entries) =
-                extract_toc_from_pages_with_diagnostics(doc, page_count);
-
-            if !heuristic_entries.is_empty() {
-                return TocDiagnostics {
-                    source: TocSource::Heuristics,
-                    outline_info: Some(outline_info),
-                    heuristics_info: Some(heuristics_info),
-                    entries: heuristic_entries,
-                };
-            }
-
-            // Heuristics also failed, return empty
+        if validation_passed {
             return TocDiagnostics {
-                source: TocSource::None,
+                source: TocSource::Metadata,
                 outline_info: Some(outline_info),
-                heuristics_info: Some(heuristics_info),
-                entries: Vec::new(),
+                heuristics_info: None,
+                entries,
             };
         }
+
+        // Outlines exist but failed validation - try heuristics
+        let (heuristics_info, heuristic_entries) =
+            extract_toc_from_pages_with_diagnostics(doc, page_count);
+
+        if !heuristic_entries.is_empty() {
+            return TocDiagnostics {
+                source: TocSource::Heuristics,
+                outline_info: Some(outline_info),
+                heuristics_info: Some(heuristics_info),
+                entries: heuristic_entries,
+            };
+        }
+
+        // Heuristics also failed, return empty
+        return TocDiagnostics {
+            source: TocSource::None,
+            outline_info: Some(outline_info),
+            heuristics_info: Some(heuristics_info),
+            entries: Vec::new(),
+        };
     }
 
     // No outlines - use heuristics
@@ -398,10 +398,10 @@ fn find_toc_start_with_diagnostics(
                     } else {
                         line_info.reject_reason = Some(diagnose_page_number_rejection(&text));
                         // Clear pending if gap too large
-                        if let Some(title_y1) = pending_title_for_score {
-                            if (line.y0 - title_y1).abs() > max_gap {
-                                pending_title_for_score = None;
-                            }
+                        if let Some(title_y1) = pending_title_for_score
+                            && (line.y0 - title_y1).abs() > max_gap
+                        {
+                            pending_title_for_score = None;
                         }
                     }
                 }
@@ -541,15 +541,15 @@ fn extract_toc_entries_from_page_with_diagnostics(
         let line_height = (line.y1 - line.y0).max(1.0);
         let max_gap = line_height * 12.0;
 
-        if let Some((_, _, y1)) = pending_title {
-            if line.y0 > y1 + max_gap {
-                pending_title = None;
-            }
+        if let Some((_, _, y1)) = pending_title
+            && line.y0 > y1 + max_gap
+        {
+            pending_title = None;
         }
-        if let Some((_, y1)) = pending_prefix {
-            if line.y0 > y1 + max_gap * 2.0 {
-                pending_prefix = None;
-            }
+        if let Some((_, y1)) = pending_prefix
+            && line.y0 > y1 + max_gap * 2.0
+        {
+            pending_prefix = None;
         }
 
         let segments = split_on_bullet_separators(&raw_text);
@@ -645,13 +645,12 @@ fn extract_toc_entries_from_page_with_diagnostics(
                 if cleaned.is_empty() {
                     continue;
                 }
-                if let Some((pending, _, y1)) = pending_title.as_ref() {
-                    if contains_digit(pending)
-                        && !contains_digit(cleaned)
-                        && (line.y0 - *y1).abs() <= max_gap * 2.0
-                    {
-                        continue;
-                    }
+                if let Some((pending, _, y1)) = pending_title.as_ref()
+                    && contains_digit(pending)
+                    && !contains_digit(cleaned)
+                    && (line.y0 - *y1).abs() <= max_gap * 2.0
+                {
+                    continue;
                 }
                 pending_title = Some((cleaned.to_string(), level, line.y1));
             }
@@ -715,11 +714,11 @@ fn infer_toc_hierarchy_with_diagnostics(entries: &mut [TocEntry]) -> HierarchyIn
 
     let mut saw_hierarchy = false;
     for i in 1..parsed.len() {
-        if let (Some(prev), Some(curr)) = (&parsed[i - 1], &parsed[i]) {
-            if curr.is_child_of(prev) || prev.depth() != curr.depth() {
-                saw_hierarchy = true;
-                break;
-            }
+        if let (Some(prev), Some(curr)) = (&parsed[i - 1], &parsed[i])
+            && (curr.is_child_of(prev) || prev.depth() != curr.depth())
+        {
+            saw_hierarchy = true;
+            break;
         }
     }
 
@@ -771,13 +770,13 @@ pub struct TocEntry {
 
 /// Extract table of contents from document outlines or by scanning pages.
 pub fn extract_toc(doc: &Document, page_count: usize) -> Vec<TocEntry> {
-    if let Ok(outlines) = doc.outlines() {
-        if !outlines.is_empty() {
-            let mut entries = Vec::new();
-            flatten_outlines(&outlines, 0, &mut entries);
-            if looks_like_valid_toc(&entries) {
-                return entries;
-            }
+    if let Ok(outlines) = doc.outlines()
+        && !outlines.is_empty()
+    {
+        let mut entries = Vec::new();
+        flatten_outlines(&outlines, 0, &mut entries);
+        if looks_like_valid_toc(&entries) {
+            return entries;
         }
     }
 
@@ -971,10 +970,10 @@ fn find_toc_start(doc: &Document, max_pages: usize) -> Option<usize> {
                 }
             } else if looks_like_toc_title_line(trimmed) {
                 pending_title_for_score = Some(line.y1);
-            } else if let Some(title_y1) = pending_title_for_score {
-                if (line.y0 - title_y1).abs() > max_gap {
-                    pending_title_for_score = None;
-                }
+            } else if let Some(title_y1) = pending_title_for_score
+                && (line.y0 - title_y1).abs() > max_gap
+            {
+                pending_title_for_score = None;
             }
         }
 
@@ -1074,15 +1073,15 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
         let line_height = (line.y1 - line.y0).max(1.0);
         let max_gap = line_height * 12.0;
 
-        if let Some((_, _, y1)) = pending_title {
-            if line.y0 > y1 + max_gap {
-                pending_title = None;
-            }
+        if let Some((_, _, y1)) = pending_title
+            && line.y0 > y1 + max_gap
+        {
+            pending_title = None;
         }
-        if let Some((_, y1)) = pending_prefix {
-            if line.y0 > y1 + max_gap * 2.0 {
-                pending_prefix = None;
-            }
+        if let Some((_, y1)) = pending_prefix
+            && line.y0 > y1 + max_gap * 2.0
+        {
+            pending_prefix = None;
         }
 
         // Split line on bullet separators (■, •, etc.) for multi-entry lines
@@ -1179,13 +1178,12 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
                 if cleaned.is_empty() {
                     continue;
                 }
-                if let Some((pending, _, y1)) = pending_title.as_ref() {
-                    if contains_digit(pending)
-                        && !contains_digit(cleaned)
-                        && (line.y0 - *y1).abs() <= max_gap * 2.0
-                    {
-                        continue;
-                    }
+                if let Some((pending, _, y1)) = pending_title.as_ref()
+                    && contains_digit(pending)
+                    && !contains_digit(cleaned)
+                    && (line.y0 - *y1).abs() <= max_gap * 2.0
+                {
+                    continue;
                 }
                 pending_title = Some((cleaned.to_string(), level, line.y1));
             }
@@ -1896,11 +1894,11 @@ fn infer_toc_hierarchy(entries: &mut [TocEntry]) {
     // Check for consistent hierarchical pattern
     let mut saw_hierarchy = false;
     for i in 1..parsed.len() {
-        if let (Some(prev), Some(curr)) = (&parsed[i - 1], &parsed[i]) {
-            if curr.is_child_of(prev) || prev.depth() != curr.depth() {
-                saw_hierarchy = true;
-                break;
-            }
+        if let (Some(prev), Some(curr)) = (&parsed[i - 1], &parsed[i])
+            && (curr.is_child_of(prev) || prev.depth() != curr.depth())
+        {
+            saw_hierarchy = true;
+            break;
         }
     }
 

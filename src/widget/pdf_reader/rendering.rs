@@ -312,26 +312,25 @@ pub(crate) fn apply_render_responses(
                         .observe(page, &info.line_bounds, data.page_height_px);
 
                     // Update cursor if normal mode is active and cursor is on this page
-                    if pdf_reader.normal_mode.active && pdf_reader.normal_mode.cursor.page == page {
-                        if let Some(tx) = conversion_tx {
-                            let cursor_rect =
-                                pdf_reader.normal_mode.get_cursor_rect(&info.line_bounds);
-                            let _ = tx.send(ConversionCommand::UpdateCursor(cursor_rect));
-                        }
+                    if pdf_reader.normal_mode.active
+                        && pdf_reader.normal_mode.cursor.page == page
+                        && let Some(tx) = conversion_tx
+                    {
+                        let cursor_rect = pdf_reader.normal_mode.get_cursor_rect(&info.line_bounds);
+                        let _ = tx.send(ConversionCommand::UpdateCursor(cursor_rect));
                     }
                 }
 
                 if let Some(tx) = conversion_tx {
                     log::trace!("Sending EnqueuePage for page {page} to converter");
                     let _ = tx.send(ConversionCommand::EnqueuePage(Arc::clone(&data)));
-                } else if !use_kitty {
-                    if let Some(picker) = picker {
-                        if let Some(converted) = convert_page_image(&data.img_data, picker) {
-                            info.img = Some(converted);
-                            info.image_requested_scale = Some(data.requested_scale);
-                            info.image_achieved_scale = Some(data.achieved_scale);
-                        }
-                    }
+                } else if !use_kitty
+                    && let Some(picker) = picker
+                    && let Some(converted) = convert_page_image(&data.img_data, picker)
+                {
+                    info.img = Some(converted);
+                    info.image_requested_scale = Some(data.requested_scale);
+                    info.image_achieved_scale = Some(data.achieved_scale);
                 }
 
                 // Re-apply any pending highlight (search match or mark-jump
@@ -343,10 +342,10 @@ pub(crate) fn apply_render_responses(
                         .is_some_and(|h| h.page == page)
                 {
                     let rects = pdf_reader.pending_highlight_rects();
-                    if !rects.is_empty() {
-                        if let Some(tx) = conversion_tx {
-                            let _ = tx.send(ConversionCommand::UpdateSelection(rects));
-                        }
+                    if !rects.is_empty()
+                        && let Some(tx) = conversion_tx
+                    {
+                        let _ = tx.send(ConversionCommand::UpdateSelection(rects));
                     }
                 }
 
@@ -481,31 +480,31 @@ pub(crate) fn apply_render_responses(
         let current_page = pdf_reader.page;
         let mut cleared_pages = Vec::new();
         for (idx, info) in pdf_reader.rendered.iter_mut().enumerate() {
-            if idx.abs_diff(current_page) > KITTY_CACHE_RADIUS {
-                if let Some(ConvertedImage::Kitty { ref img, .. }) = info.img {
-                    if img.is_uploaded() {
-                        log::trace!(
-                            "Clearing stale Uploaded state for distant page {idx} (current={current_page})"
-                        );
-                        info.clear_image();
-                        cleared_pages.push(idx);
-                    } else if matches!(img, crate::pdf::kittyv2::ImageState::Queued(_)) {
-                        log::trace!(
-                            "Dropping queued Kitty image for distant page {idx} (current={current_page})"
-                        );
-                        info.clear_image();
-                        cleared_pages.push(idx);
-                    }
+            if idx.abs_diff(current_page) > KITTY_CACHE_RADIUS
+                && let Some(ConvertedImage::Kitty { ref img, .. }) = info.img
+            {
+                if img.is_uploaded() {
+                    log::trace!(
+                        "Clearing stale Uploaded state for distant page {idx} (current={current_page})"
+                    );
+                    info.clear_image();
+                    cleared_pages.push(idx);
+                } else if matches!(img, crate::pdf::kittyv2::ImageState::Queued(_)) {
+                    log::trace!(
+                        "Dropping queued Kitty image for distant page {idx} (current={current_page})"
+                    );
+                    info.clear_image();
+                    cleared_pages.push(idx);
                 }
             }
         }
         // Notify converter about cleared pages so it clears sent_for_viewport
         // This prevents desync where converter thinks page is sent but rendering
         // code has cleared it.
-        if !cleared_pages.is_empty() {
-            if let Some(tx) = conversion_tx {
-                let _ = tx.send(ConversionCommand::DisplayFailed(cleared_pages));
-            }
+        if !cleared_pages.is_empty()
+            && let Some(tx) = conversion_tx
+        {
+            let _ = tx.send(ConversionCommand::DisplayFailed(cleared_pages));
         }
     }
 
@@ -972,10 +971,10 @@ impl PdfReaderState {
             //   pages with fresh PageData instead of skipping them
             if area_changed {
                 for info in self.rendered.iter_mut() {
-                    if let Some(render_w) = info.render_area_width_cells {
-                        if render_w != inner_area.width {
-                            info.clear_image();
-                        }
+                    if let Some(render_w) = info.render_area_width_cells
+                        && render_w != inner_area.width
+                    {
+                        info.clear_image();
                     }
                 }
                 if let Some(tx) = conversion_tx {
@@ -1035,17 +1034,15 @@ impl PdfReaderState {
             if let Some(service) = service.as_deref_mut() {
                 service.request_page(self.page);
             }
-            if is_kitty {
-                if let Some(tx) = conversion_tx {
-                    let _ = tx.send(ConversionCommand::NavigateTo(self.page));
-                }
+            if is_kitty && let Some(tx) = conversion_tx {
+                let _ = tx.send(ConversionCommand::NavigateTo(self.page));
             }
         }
 
-        if expected_page != self.page {
-            if let Some(tx) = conversion_tx {
-                let _ = tx.send(ConversionCommand::NavigateTo(expected_page));
-            }
+        if expected_page != self.page
+            && let Some(tx) = conversion_tx
+        {
+            let _ = tx.send(ConversionCommand::NavigateTo(expected_page));
         }
 
         if let Some(service) = service {
@@ -1078,34 +1075,32 @@ impl PdfReaderState {
 
                 // For Kitty: if page is cached in service but converter might not have it,
                 // re-send the cached data. Only sends if local state has no image.
-                if is_kitty {
-                    if let Some(tx) = conversion_tx {
-                        send_cached_page_to_converter(
-                            service,
-                            tx,
-                            clamped_expected_page,
-                            &self.rendered,
-                        );
-                        for offset in 1..=prefetch_ahead {
-                            if let Some(forward_page) = clamped_expected_page
-                                .checked_add(offset)
-                                .filter(|page| *page <= max_page)
-                            {
-                                send_cached_page_to_converter(
-                                    service,
-                                    tx,
-                                    forward_page,
-                                    &self.rendered,
-                                );
-                            }
-                            if clamped_expected_page >= offset {
-                                send_cached_page_to_converter(
-                                    service,
-                                    tx,
-                                    clamped_expected_page - offset,
-                                    &self.rendered,
-                                );
-                            }
+                if is_kitty && let Some(tx) = conversion_tx {
+                    send_cached_page_to_converter(
+                        service,
+                        tx,
+                        clamped_expected_page,
+                        &self.rendered,
+                    );
+                    for offset in 1..=prefetch_ahead {
+                        if let Some(forward_page) = clamped_expected_page
+                            .checked_add(offset)
+                            .filter(|page| *page <= max_page)
+                        {
+                            send_cached_page_to_converter(
+                                service,
+                                tx,
+                                forward_page,
+                                &self.rendered,
+                            );
+                        }
+                        if clamped_expected_page >= offset {
+                            send_cached_page_to_converter(
+                                service,
+                                tx,
+                                clamped_expected_page - offset,
+                                &self.rendered,
+                            );
                         }
                     }
                 }
@@ -1215,12 +1210,11 @@ pub(crate) fn execute_display_plan(
                             end_page + 1
                         );
                         for page in start_page..=end_page {
-                            if let Some(info) = pdf_reader.rendered.get_mut(page) {
-                                if let Some(ConvertedImage::Kitty { ref img, .. }) = info.img {
-                                    if img.is_uploaded() {
-                                        info.clear_image();
-                                    }
-                                }
+                            if let Some(info) = pdf_reader.rendered.get_mut(page)
+                                && let Some(ConvertedImage::Kitty { ref img, .. }) = info.img
+                                && img.is_uploaded()
+                            {
+                                info.clear_image();
                             }
                             deleted_pages.push(page);
                         }
@@ -1241,12 +1235,11 @@ pub(crate) fn execute_display_plan(
                     }
                 } else {
                     for page in 0..window_start {
-                        if let Some(info) = pdf_reader.rendered.get_mut(page) {
-                            if let Some(ConvertedImage::Kitty { ref img, .. }) = info.img {
-                                if img.is_uploaded() {
-                                    info.clear_image();
-                                }
-                            }
+                        if let Some(info) = pdf_reader.rendered.get_mut(page)
+                            && let Some(ConvertedImage::Kitty { ref img, .. }) = info.img
+                            && img.is_uploaded()
+                        {
+                            info.clear_image();
                         }
                         deleted_pages.push(page);
                         let Some(id) = NonZeroU32::new(page as u32 + 1) else {
@@ -1255,12 +1248,11 @@ pub(crate) fn execute_display_plan(
                         let _ = crate::pdf::kittyv2::delete_image_by_id(id);
                     }
                     for page in (window_end + 1)..total_pages {
-                        if let Some(info) = pdf_reader.rendered.get_mut(page) {
-                            if let Some(ConvertedImage::Kitty { ref img, .. }) = info.img {
-                                if img.is_uploaded() {
-                                    info.clear_image();
-                                }
-                            }
+                        if let Some(info) = pdf_reader.rendered.get_mut(page)
+                            && let Some(ConvertedImage::Kitty { ref img, .. }) = info.img
+                            && img.is_uploaded()
+                        {
+                            info.clear_image();
                         }
                         deleted_pages.push(page);
                         let Some(id) = NonZeroU32::new(page as u32 + 1) else {
@@ -1270,10 +1262,10 @@ pub(crate) fn execute_display_plan(
                     }
                 }
 
-                if !deleted_pages.is_empty() {
-                    if let Some(tx) = conversion_tx {
-                        let _ = tx.send(ConversionCommand::DisplayFailed(deleted_pages));
-                    }
+                if !deleted_pages.is_empty()
+                    && let Some(tx) = conversion_tx
+                {
+                    let _ = tx.send(ConversionCommand::DisplayFailed(deleted_pages));
                 }
                 pdf_reader.last_kitty_cache_window = Some((window_start, window_end));
             }
@@ -1357,12 +1349,11 @@ pub(crate) fn execute_display_plan(
             if !failed_pages.is_empty() {
                 log::debug!("kittyv2 display failed for pages {failed_pages:?}");
                 for page in &failed_pages {
-                    if let Some(info) = pdf_reader.rendered.get_mut(*page) {
-                        if let Some(ConvertedImage::Kitty { ref img, .. }) = info.img {
-                            if img.is_uploaded() {
-                                info.clear_image();
-                            }
-                        }
+                    if let Some(info) = pdf_reader.rendered.get_mut(*page)
+                        && let Some(ConvertedImage::Kitty { ref img, .. }) = info.img
+                        && img.is_uploaded()
+                    {
+                        info.clear_image();
                     }
                 }
                 if let Some(tx) = conversion_tx {
@@ -1632,11 +1623,11 @@ impl PdfReaderState {
         };
 
         let mut out = String::new();
-        if self.sixel_margin_scroll {
-            if let Some(scroll) = SixelScroll::find(&on_screen, &strips) {
-                scroll.emit(&mut out);
-                on_screen = scroll.shift(&on_screen);
-            }
+        if self.sixel_margin_scroll
+            && let Some(scroll) = SixelScroll::find(&on_screen, &strips)
+        {
+            scroll.emit(&mut out);
+            on_screen = scroll.shift(&on_screen);
         }
         for strip in &strips {
             if on_screen.contains(&(strip.area, strip.id())) {
@@ -3582,14 +3573,13 @@ impl PdfReaderState {
         };
         for offset in 0..pages_to_render {
             let page_idx = self.page + offset;
-            if let Some(page) = self.rendered.get(page_idx) {
-                if page.img.is_some()
-                    && (page_layout_mode != PdfPageLayoutMode::Dual
-                        || self.page_matches_dual_scale(page_idx, img_area.width))
-                    && let Some((w, h)) = page.full_cell_size.map(|size| size.as_tuple())
-                {
-                    page_sizes.push((page_idx, w, h));
-                }
+            if let Some(page) = self.rendered.get(page_idx)
+                && page.img.is_some()
+                && (page_layout_mode != PdfPageLayoutMode::Dual
+                    || self.page_matches_dual_scale(page_idx, img_area.width))
+                && let Some((w, h)) = page.full_cell_size.map(|size| size.as_tuple())
+            {
+                page_sizes.push((page_idx, w, h));
             }
         }
         if page_layout_mode == PdfPageLayoutMode::Dual {
@@ -3766,10 +3756,10 @@ impl PdfReaderState {
             self.last_render.unused_width = unused_width;
             img_area.x += unused_width / 2;
 
-            if let Some(total_height) = page_sizes.iter().map(|(_, _, h)| h).max() {
-                if let Some(unused_height) = img_area.height.checked_sub(*total_height) {
-                    img_area.y += unused_height / 2;
-                }
+            if let Some(total_height) = page_sizes.iter().map(|(_, _, h)| h).max()
+                && let Some(unused_height) = img_area.height.checked_sub(*total_height)
+            {
+                img_area.y += unused_height / 2;
             }
 
             let centered_img_area = img_area;
@@ -3922,26 +3912,26 @@ impl PdfReaderState {
             self.coord_info = Some((centered_img_area, font_size));
 
             // Render comment sidebar in natural margin (non-Kitty mode)
-            if self.comments_enabled && !comment_modal {
-                if let Some(sidebar_area) =
+            if self.comments_enabled
+                && !comment_modal
+                && let Some(sidebar_area) =
                     Self::comment_sidebar_area(inner_area, total_width, &sidebar_comments)
-                {
-                    let flat_nav_index = if dual_layout && self.comment_nav_page == self.page + 1 {
-                        left_page_comment_count + self.comment_nav_index
-                    } else {
-                        self.comment_nav_index
-                    };
-                    Self::render_comment_list_sidebar(
-                        &sidebar_comments,
-                        frame,
-                        sidebar_area,
-                        bg_color,
-                        self.palette.base_0e,
-                        muted_color,
-                        self.comment_nav_active,
-                        flat_nav_index,
-                    );
-                }
+            {
+                let flat_nav_index = if dual_layout && self.comment_nav_page == self.page + 1 {
+                    left_page_comment_count + self.comment_nav_index
+                } else {
+                    self.comment_nav_index
+                };
+                Self::render_comment_list_sidebar(
+                    &sidebar_comments,
+                    frame,
+                    sidebar_area,
+                    bg_color,
+                    self.palette.base_0e,
+                    muted_color,
+                    self.comment_nav_active,
+                    flat_nav_index,
+                );
             }
 
             if let Some(ref msg) = modal_msg {
@@ -4062,10 +4052,10 @@ impl PdfReaderState {
             }
         };
         let mut rects = vec![pad_rect(img_area)];
-        if let Some(prev) = self.last_nonkitty_cleanup_area {
-            if prev != img_area {
-                rects.push(pad_rect(prev));
-            }
+        if let Some(prev) = self.last_nonkitty_cleanup_area
+            && prev != img_area
+        {
+            rects.push(pad_rect(prev));
         }
         rects
     }

@@ -308,7 +308,7 @@ fn encode_quantized_indexed_png(rgb: &ImageBuffer<Rgb<u8>, Vec<u8>>) -> Option<V
     let mut color_counts: HashMap<[u8; 3], u32> = HashMap::new();
     let mut idx = 0u64;
     for pixel in rgb.pixels() {
-        if sample_every > 1 && idx % sample_every != 0 {
+        if sample_every > 1 && !idx.is_multiple_of(sample_every) {
             idx += 1;
             continue;
         }

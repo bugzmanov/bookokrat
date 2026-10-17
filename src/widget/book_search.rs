@@ -105,11 +105,11 @@ impl BookSearch {
     }
 
     pub fn update(&mut self) -> Option<BookSearchAction> {
-        if let Some(ref query) = self.pending_search {
-            if self.last_input_time.elapsed() > Duration::from_millis(200) {
-                self.execute_search(query.clone());
-                self.pending_search = None;
-            }
+        if let Some(ref query) = self.pending_search
+            && self.last_input_time.elapsed() > Duration::from_millis(200)
+        {
+            self.execute_search(query.clone());
+            self.pending_search = None;
         }
         None
     }

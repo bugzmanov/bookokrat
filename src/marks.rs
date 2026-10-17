@@ -196,10 +196,10 @@ impl GlobalMarks {
         let Some(path) = &self.file_path else {
             return Ok(());
         };
-        if let Some(parent) = Path::new(path).parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = Path::new(path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(self)?;
         fs::write(path, content)?;

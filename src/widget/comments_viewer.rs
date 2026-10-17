@@ -204,12 +204,12 @@ impl CommentsViewer {
                 self.selected_index = selection.min(self.rendered_entries.len().saturating_sub(1));
                 return;
             }
-        } else if let Some(key) = self.current_chapter_key() {
-            if let Some((scroll, selection)) = self.chapter_positions.get(&key).copied() {
-                self.scroll_offset = scroll.min(self.total_rendered_lines.saturating_sub(1));
-                self.selected_index = selection.min(self.rendered_entries.len().saturating_sub(1));
-                return;
-            }
+        } else if let Some(key) = self.current_chapter_key()
+            && let Some((scroll, selection)) = self.chapter_positions.get(&key).copied()
+        {
+            self.scroll_offset = scroll.min(self.total_rendered_lines.saturating_sub(1));
+            self.selected_index = selection.min(self.rendered_entries.len().saturating_sub(1));
+            return;
         }
 
         if let Some((scroll, selection)) = if self.global_search_mode {
@@ -406,14 +406,13 @@ impl CommentsViewer {
             .collect();
         for href in unique_hrefs {
             let chapter_path = std::path::PathBuf::from(&href);
-            if let Some(chapter_id) = epub.resource_uri_to_chapter(&chapter_path) {
-                if epub.set_current_chapter(chapter_id) {
-                    if let Some((content, _)) = epub.get_current_str() {
-                        let mut converter = HtmlToMarkdownConverter::new();
-                        let doc = converter.convert(&content);
-                        doc_cache.insert(href, doc);
-                    }
-                }
+            if let Some(chapter_id) = epub.resource_uri_to_chapter(&chapter_path)
+                && epub.set_current_chapter(chapter_id)
+                && let Some((content, _)) = epub.get_current_str()
+            {
+                let mut converter = HtmlToMarkdownConverter::new();
+                let doc = converter.convert(&content);
+                doc_cache.insert(href, doc);
             }
         }
         let _ = epub.set_current_chapter(original_chapter);
@@ -783,16 +782,16 @@ impl CommentsViewer {
                     children,
                     ..
                 } => {
-                    if let Some(href) = href {
-                        if seen_hrefs.insert(href.clone()) {
-                            href_to_index.insert(href.clone(), chapters.len());
-                            chapters.push(ChapterDisplay {
-                                title: title.clone(),
-                                href: Some(href.clone()),
-                                depth: 0,
-                                comment_count: 0,
-                            });
-                        }
+                    if let Some(href) = href
+                        && seen_hrefs.insert(href.clone())
+                    {
+                        href_to_index.insert(href.clone(), chapters.len());
+                        chapters.push(ChapterDisplay {
+                            title: title.clone(),
+                            href: Some(href.clone()),
+                            depth: 0,
+                            comment_count: 0,
+                        });
                     }
                     Self::flatten_toc_items(children, chapters, href_to_index, seen_hrefs);
                 }
@@ -832,10 +831,10 @@ impl CommentsViewer {
                         children,
                         ..
                     } => {
-                        if let Some(h) = item_href {
-                            if h == href {
-                                return Some(title.clone());
-                            }
+                        if let Some(h) = item_href
+                            && h == href
+                        {
+                            return Some(title.clone());
                         }
                         if let Some(found) = search_toc(children, href) {
                             return Some(found);
@@ -1702,37 +1701,39 @@ impl CommentsViewer {
         let steps = scroll_amount.abs().min(10);
         let scroll_down = scroll_amount > 0;
 
-        if let Some(area) = self.last_chapter_area {
-            if column >= area.x && column < area.x + area.width {
-                self.focus = ViewerFocus::Chapters;
-                if !self.global_search_mode {
-                    for _ in 0..steps {
-                        if scroll_down {
-                            self.move_chapter_down();
-                        } else {
-                            self.move_chapter_up();
-                        }
-                    }
-                }
-                return true;
-            }
-        }
-
-        if let Some(area) = self.last_comments_area {
-            if column >= area.x && column < area.x + area.width {
-                self.focus = ViewerFocus::Comments;
-                if self.rendered_entries.is_empty() {
-                    return true;
-                }
+        if let Some(area) = self.last_chapter_area
+            && column >= area.x
+            && column < area.x + area.width
+        {
+            self.focus = ViewerFocus::Chapters;
+            if !self.global_search_mode {
                 for _ in 0..steps {
                     if scroll_down {
-                        self.next();
+                        self.move_chapter_down();
                     } else {
-                        self.previous();
+                        self.move_chapter_up();
                     }
                 }
+            }
+            return true;
+        }
+
+        if let Some(area) = self.last_comments_area
+            && column >= area.x
+            && column < area.x + area.width
+        {
+            self.focus = ViewerFocus::Comments;
+            if self.rendered_entries.is_empty() {
                 return true;
             }
+            for _ in 0..steps {
+                if scroll_down {
+                    self.next();
+                } else {
+                    self.previous();
+                }
+            }
+            return true;
         }
 
         false
@@ -1928,39 +1929,35 @@ impl CommentsViewer {
     }
 
     pub fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
-        if let Some(chapter_area) = self.last_chapter_area {
-            if x >= chapter_area.x
-                && x < chapter_area.x + chapter_area.width
-                && y >= chapter_area.y
-                && y < chapter_area.y + chapter_area.height
-            {
-                self.focus = ViewerFocus::Chapters;
-                let relative_y = y.saturating_sub(chapter_area.y);
-                let target_index = self.chapter_scroll_offset + relative_y as usize;
-                if !self.global_search_mode && target_index < self.chapters.len() {
-                    self.select_chapter(target_index);
-                }
-                return false;
+        if let Some(chapter_area) = self.last_chapter_area
+            && x >= chapter_area.x
+            && x < chapter_area.x + chapter_area.width
+            && y >= chapter_area.y
+            && y < chapter_area.y + chapter_area.height
+        {
+            self.focus = ViewerFocus::Chapters;
+            let relative_y = y.saturating_sub(chapter_area.y);
+            let target_index = self.chapter_scroll_offset + relative_y as usize;
+            if !self.global_search_mode && target_index < self.chapters.len() {
+                self.select_chapter(target_index);
             }
+            return false;
         }
 
-        if let Some(comment_area) = self.last_comments_area {
-            if x >= comment_area.x
-                && x < comment_area.x + comment_area.width
-                && y >= comment_area.y
-                && y < comment_area.y + comment_area.height
-            {
-                self.focus = ViewerFocus::Comments;
-                let relative_y = y.saturating_sub(comment_area.y);
-                let clicked_line = self.scroll_offset + relative_y as usize;
+        if let Some(comment_area) = self.last_comments_area
+            && x >= comment_area.x
+            && x < comment_area.x + comment_area.width
+            && y >= comment_area.y
+            && y < comment_area.y + comment_area.height
+        {
+            self.focus = ViewerFocus::Comments;
+            let relative_y = y.saturating_sub(comment_area.y);
+            let clicked_line = self.scroll_offset + relative_y as usize;
 
-                for (idx, entry) in self.rendered_entries.iter().enumerate() {
-                    if clicked_line >= entry.render_start_line
-                        && clicked_line < entry.render_end_line
-                    {
-                        self.selected_index = idx;
-                        return true;
-                    }
+            for (idx, entry) in self.rendered_entries.iter().enumerate() {
+                if clicked_line >= entry.render_start_line && clicked_line < entry.render_end_line {
+                    self.selected_index = idx;
+                    return true;
                 }
             }
         }

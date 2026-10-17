@@ -1773,27 +1773,28 @@ impl SettingsPopup {
 
     pub fn handle_mouse_click(&mut self, col: u16, row: u16) -> Option<SettingsAction> {
         // Tab bar clicks
-        if let Some(tab_area) = self.tab_area {
-            if row >= tab_area.y && row < tab_area.y + tab_area.height {
-                let rel_x = col.saturating_sub(tab_area.x);
-                // Tab positions: " General   Select Theme   Integrations"
-                //                  1..8       11..23          26..38
-                let new_tab = if cfg!(feature = "pdf") && (1..11).contains(&rel_x) {
-                    Some(SettingsTab::General)
-                } else if (11..26).contains(&rel_x) {
-                    Some(SettingsTab::Themes)
-                } else if rel_x >= 26 {
-                    Some(SettingsTab::Integrations)
-                } else {
-                    None
-                };
-                if let Some(tab) = new_tab {
-                    if self.current_tab == SettingsTab::Integrations {
-                        self.save_integrations();
-                    }
-                    self.set_tab(tab);
-                    return None;
+        if let Some(tab_area) = self.tab_area
+            && row >= tab_area.y
+            && row < tab_area.y + tab_area.height
+        {
+            let rel_x = col.saturating_sub(tab_area.x);
+            // Tab positions: " General   Select Theme   Integrations"
+            //                  1..8       11..23          26..38
+            let new_tab = if cfg!(feature = "pdf") && (1..11).contains(&rel_x) {
+                Some(SettingsTab::General)
+            } else if (11..26).contains(&rel_x) {
+                Some(SettingsTab::Themes)
+            } else if rel_x >= 26 {
+                Some(SettingsTab::Integrations)
+            } else {
+                None
+            };
+            if let Some(tab) = new_tab {
+                if self.current_tab == SettingsTab::Integrations {
+                    self.save_integrations();
                 }
+                self.set_tab(tab);
+                return None;
             }
         }
 
@@ -1844,29 +1845,27 @@ impl SettingsPopup {
                 }
             }
             SettingsTab::Themes => {
-                if let Some(r) = chunks.first() {
-                    if col >= r.x
-                        && col < r.x + r.width
-                        && virtual_row >= r.y
-                        && virtual_row < r.y + r.height
-                    {
-                        let idx = (virtual_row - r.y) as usize;
-                        if idx < self.theme_names.len() {
-                            self.theme_selected_idx = idx;
-                            return self.apply_theme_selected();
-                        }
-                    }
-                }
-                if let Some(r) = chunks.get(4) {
-                    if col >= r.x
-                        && col < r.x + r.width
-                        && virtual_row >= r.y
-                        && virtual_row < r.y + r.height
-                    {
-                        let sub = (virtual_row - r.y) as usize;
-                        self.theme_selected_idx = self.theme_names.len() + sub;
+                if let Some(r) = chunks.first()
+                    && col >= r.x
+                    && col < r.x + r.width
+                    && virtual_row >= r.y
+                    && virtual_row < r.y + r.height
+                {
+                    let idx = (virtual_row - r.y) as usize;
+                    if idx < self.theme_names.len() {
+                        self.theme_selected_idx = idx;
                         return self.apply_theme_selected();
                     }
+                }
+                if let Some(r) = chunks.get(4)
+                    && col >= r.x
+                    && col < r.x + r.width
+                    && virtual_row >= r.y
+                    && virtual_row < r.y + r.height
+                {
+                    let sub = (virtual_row - r.y) as usize;
+                    self.theme_selected_idx = self.theme_names.len() + sub;
+                    return self.apply_theme_selected();
                 }
             }
             SettingsTab::Integrations => {

@@ -1265,10 +1265,10 @@ impl MarkdownTextReader {
     }
 
     pub fn clear_expired_yank_highlight(&mut self) {
-        if let Some(ref highlight) = self.normal_mode.yank_highlight {
-            if highlight.is_expired() {
-                self.normal_mode.yank_highlight = None;
-            }
+        if let Some(ref highlight) = self.normal_mode.yank_highlight
+            && highlight.is_expired()
+        {
+            self.normal_mode.yank_highlight = None;
         }
     }
 
@@ -1733,10 +1733,10 @@ impl MarkdownTextReader {
         // Extend to additional paragraphs
         for _ in 1..count {
             let next = self.find_next_paragraph_boundary(end);
-            if next > end {
-                if let Some((_, new_end)) = self.find_paragraph_bounds(next) {
-                    end = new_end;
-                }
+            if next > end
+                && let Some((_, new_end)) = self.find_paragraph_bounds(next)
+            {
+                end = new_end;
             }
         }
 
@@ -1768,10 +1768,10 @@ impl MarkdownTextReader {
             }
             // Find next paragraph
             let next = end + 1;
-            if next < total {
-                if let Some((_, new_end)) = self.find_paragraph_bounds(next) {
-                    end = new_end;
-                }
+            if next < total
+                && let Some((_, new_end)) = self.find_paragraph_bounds(next)
+            {
+                end = new_end;
             }
         }
 
@@ -1867,7 +1867,7 @@ impl MarkdownTextReader {
         if chars.get(col) == Some(&quote) {
             // Could be opening or closing - need to count
             let quotes_before: usize = chars[..col].iter().filter(|&&c| c == quote).count();
-            if quotes_before % 2 == 0 {
+            if quotes_before.is_multiple_of(2) {
                 // This is an opening quote
                 open_pos = Some(col);
             } else {
@@ -1881,7 +1881,7 @@ impl MarkdownTextReader {
             for i in (0..col).rev() {
                 if chars[i] == quote {
                     let quotes_before: usize = chars[..i].iter().filter(|&&c| c == quote).count();
-                    if quotes_before % 2 == 0 {
+                    if quotes_before.is_multiple_of(2) {
                         open_pos = Some(i);
                         break;
                     }

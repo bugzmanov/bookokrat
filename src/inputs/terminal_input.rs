@@ -609,10 +609,10 @@ impl TerminalInput {
         }
 
         let bytes: Vec<u8> = self.buffer.drain(..len).collect();
-        if let Ok(s) = std::str::from_utf8(&bytes) {
-            if let Some(c) = s.chars().next() {
-                return Some(key_event(KeyCode::Char(c), KeyModifiers::empty()));
-            }
+        if let Ok(s) = std::str::from_utf8(&bytes)
+            && let Some(c) = s.chars().next()
+        {
+            return Some(key_event(KeyCode::Char(c), KeyModifiers::empty()));
         }
 
         None
