@@ -1,6 +1,6 @@
 [package]
 name = "bookokrat"
-version = "0.3.13"
+version = "0.3.14"
 edition = "2024"
 rust-version = "1.90"
 authors = ["Rafael Bagmanov <bugzmanov@gmail.com>"]
