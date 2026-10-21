@@ -673,6 +673,10 @@ fn restore_image_regions(pixmap: &mut Pixmap, regions: &[ImageRegion]) {
     }
 
     let n = pixmap.n() as usize;
+    // In transparent mode the paper under an image is unpainted, so a restored stencil
+    // mask (bitonal scans) or soft-masked image would land straight on the terminal
+    // background and still look themed. Flatten onto white like the opaque render.
+    let flatten = n == 4 && pixmap.alpha();
     let width = pixmap.width() as usize;
     let samples = pixmap.samples_mut();
 
@@ -684,8 +688,25 @@ fn restore_image_regions(pixmap: &mut Pixmap, regions: &[ImageRegion]) {
             let row_end = row_start + row_bytes;
             let data_end = offset + row_bytes;
             samples[row_start..row_end].copy_from_slice(&region.data[offset..data_end]);
+            if flatten {
+                flatten_onto_white(&mut samples[row_start..row_end]);
+            }
             offset = data_end;
         }
+    }
+}
+
+/// Composite straight-alpha RGBA pixels onto opaque white.
+fn flatten_onto_white(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = u32::from(px[3]);
+        if a == 255 {
+            continue;
+        }
+        for c in &mut px[..3] {
+            *c = ((u32::from(*c) * a + 255 * (255 - a) + 127) / 255) as u8;
+        }
+        px[3] = 255;
     }
 }
 

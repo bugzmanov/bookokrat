@@ -22,6 +22,7 @@ flamegraph.svg
 !tests/testdata/vhs_twocol.pdf
 !tests/testdata/vhs_viewmodes.pdf
 !tests/testdata/vhs_transparent.pdf
+!tests/testdata/vhs_stencil.pdf
 !tests/testdata/vhs_offset.pdf
 !tests/testdata/vhs_reload.pdf
 !tests/testdata/vhs_reload_a.pdf

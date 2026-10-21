@@ -11,6 +11,10 @@ Produces:
       external (URI) link, and a small inline citation link, plus printed page
       numbers. Used for link-click (sub-cell precision) and content-page tests.
 
+  tests/testdata/vhs_stencil.pdf - scanned-book style pages whose images are
+      stencil image masks (ink only, paper unpainted) next to an opaque image.
+      Used for the image-inversion toggle with a transparent background.
+
 No copyrighted content. Re-run to regenerate.
 """
 
@@ -274,6 +278,103 @@ def transparent_pdf(path, pages=2):
     print("wrote", path)
 
 
+def stencil_mask_pdf(path):
+    """Scanned-book style pages whose "images" are stencil image masks.
+
+    Bitonal scans (JBIG2 / CCITT) are usually /ImageMask true: only the ink is
+    painted and the paper stays unpainted, so whatever is behind the image shows
+    through. Page 1 puts a stencil checker next to an opaque DeviceGray ramp so
+    the two kinds of image can be compared in one shot; page 2 is a full-page
+    bitonal mask like a scanned text page. Hand-written PDF (reportlab cannot
+    emit a stencil mask); fully deterministic, no dates or ids.
+    """
+    page_w, page_h = int(PAGE_W), int(PAGE_H)
+
+    def pack_rows(w, h, bit_at):
+        out = bytearray()
+        for y in range(h):
+            row = 0
+            for x in range(w):
+                row = (row << 1) | bit_at(x, y)
+                if x % 8 == 7:
+                    out.append(row)
+                    row = 0
+            if w % 8:
+                out.append(row << (8 - w % 8))
+        return bytes(out)
+
+    checker_w, checker_h = 64, 32
+    checker = pack_rows(checker_w, checker_h, lambda x, y: 1 if ((x // 4 + y // 4) % 2 == 0) else 0)
+    ramp = bytes((x * 255 // 63) for _y in range(32) for x in range(64))
+    scan_w, scan_h = 400, 500
+    # Rows of ink 6px tall every 16px, broken into "words" 30px wide every 40px.
+    scan = pack_rows(scan_w, scan_h, lambda x, y: 1 if ((y % 16) < 6 and (x % 40) < 30) else 0)
+
+    objs = []
+
+    def add(body):
+        objs.append(body)
+        return len(objs)
+
+    def stream(dictionary, data):
+        return dictionary + b" /Length %d >>\nstream\n" % len(data) + data + b"\nendstream"
+
+    font = add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    # /Decode [1 0]: a 1 bit paints (the default paints 0 bits).
+    mask_checker = add(stream(
+        b"<< /Type /XObject /Subtype /Image /Width %d /Height %d /ImageMask true"
+        b" /BitsPerComponent 1 /Decode [1 0]" % (checker_w, checker_h), checker))
+    gray_ramp = add(stream(
+        b"<< /Type /XObject /Subtype /Image /Width 64 /Height 32 /ColorSpace /DeviceGray"
+        b" /BitsPerComponent 8", ramp))
+    mask_scan = add(stream(
+        b"<< /Type /XObject /Subtype /Image /Width %d /Height %d /ImageMask true"
+        b" /BitsPerComponent 1 /Decode [1 0]" % (scan_w, scan_h), scan))
+
+    page1 = (
+        b"BT /F1 20 Tf 72 720 Td (STENCIL  -  PAGE 1) Tj ET\n"
+        b"q 0 0 0 rg 240 0 0 120 72 520 cm /M1 Do Q\n"
+        b"q 240 0 0 120 340 520 cm /G1 Do Q\n"
+        b"BT /F1 12 Tf 72 500 Td (ImageMask: black ink, paper unpainted) Tj ET\n"
+        b"BT /F1 12 Tf 340 500 Td (DeviceGray 8-bit: opaque) Tj ET\n"
+        b"BT /F1 10 Tf 290 36 Td (- 1 -) Tj ET\n"
+    )
+    page2 = (
+        b"BT /F1 20 Tf 72 740 Td (STENCIL  -  PAGE 2: full-page bitonal mask) Tj ET\n"
+        b"q 0 0 0 rg 468 0 0 620 72 90 cm /M2 Do Q\n"
+        b"BT /F1 10 Tf 290 36 Td (- 2 -) Tj ET\n"
+    )
+    contents1 = add(stream(b"<<", page1))
+    contents2 = add(stream(b"<<", page2))
+    pages_id = len(objs) + 3
+    p1 = add(
+        b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %d %d] /Resources << /Font << /F1 %d 0 R >>"
+        b" /XObject << /M1 %d 0 R /G1 %d 0 R >> >> /Contents %d 0 R >>"
+        % (pages_id, page_w, page_h, font, mask_checker, gray_ramp, contents1))
+    p2 = add(
+        b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %d %d] /Resources << /Font << /F1 %d 0 R >>"
+        b" /XObject << /M2 %d 0 R >> >> /Contents %d 0 R >>"
+        % (pages_id, page_w, page_h, font, mask_scan, contents2))
+    pages = add(b"<< /Type /Pages /Kids [%d 0 R %d 0 R] /Count 2 >>" % (p1, p2))
+    assert pages == pages_id
+    catalog = add(b"<< /Type /Catalog /Pages %d 0 R >>" % pages)
+
+    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for num, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % num + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for off in offsets:
+        out += b"%010d 00000 n \n" % off
+    out += b"trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objs) + 1, catalog, xref)
+    with open(path, "wb") as f:
+        f.write(out)
+    print("wrote", path)
+
+
 _ROMAN = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii"]
 
 
@@ -386,6 +487,7 @@ if __name__ == "__main__":
     many_pages_pdf(os.path.join(OUT_DIR, "vhs_many.pdf"))
     view_modes_pdf(os.path.join(OUT_DIR, "vhs_viewmodes.pdf"))
     transparent_pdf(os.path.join(OUT_DIR, "vhs_transparent.pdf"))
+    stencil_mask_pdf(os.path.join(OUT_DIR, "vhs_stencil.pdf"))
     offset_pdf(os.path.join(OUT_DIR, "vhs_offset.pdf"))
     reload_pdf(os.path.join(OUT_DIR, "vhs_reload_a.pdf"), "A", 3)
     reload_pdf(os.path.join(OUT_DIR, "vhs_reload_b.pdf"), "B", 2)
