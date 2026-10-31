@@ -13,6 +13,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use super::TocEntry;
 use super::cache::{CacheKey, PageCache};
 use super::parsing::page_numbers;
+#[cfg(feature = "djvu")]
 use super::parsing::toc::TocTarget;
 use super::request::{PageSelectionBounds, RenderRequest, RenderResponse, RequestId};
 use super::state::{Command, Effect, RenderState};
@@ -236,6 +237,12 @@ impl RenderService {
         })
     }
 
+    #[cfg(not(feature = "djvu"))]
+    fn load_djvu_document_info(_doc_path: &Path) -> Option<DocumentInfo> {
+        None
+    }
+
+    #[cfg(feature = "djvu")]
     fn load_djvu_document_info(doc_path: &Path) -> Option<DocumentInfo> {
         let doc = rdjvu::Document::open(doc_path).ok()?;
         let page_count = doc.page_count();
@@ -585,6 +592,7 @@ impl Drop for RenderService {
     }
 }
 
+#[cfg(feature = "djvu")]
 fn flatten_djvu_bookmarks(
     bookmarks: &[rdjvu::Bookmark],
     level: usize,
@@ -614,6 +622,7 @@ fn flatten_djvu_bookmarks(
     entries
 }
 
+#[cfg(feature = "djvu")]
 fn djvu_bookmark_target(url: &str, page_count: usize) -> TocTarget {
     let trimmed = url.trim();
 

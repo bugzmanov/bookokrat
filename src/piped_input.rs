@@ -337,12 +337,14 @@ mod tests {
     }
 
     /// Hands out `data` a few bytes at a time, with spurious `Interrupted` errors.
+    #[cfg(feature = "pdf")]
     struct ChoppyReader {
         data: Vec<u8>,
         pos: usize,
         rng: StdRng,
     }
 
+    #[cfg(feature = "pdf")]
     impl Read for ChoppyReader {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.rng.gen_bool(0.2) {
@@ -359,6 +361,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "pdf")]
     #[test]
     fn choppy_reads_produce_the_same_copy() {
         for seed in 0..50 {

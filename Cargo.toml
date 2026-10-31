@@ -119,7 +119,7 @@ windows = { version = "0.58.0", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-bookokrat = { path = ".", features = ["test-utils"] }
+bookokrat = { path = ".", default-features = false, features = ["test-utils"] }
 snapbox = { version = "0.6", features = ["term-svg"] }
 anstyle = "1.0"
 anstyle-svg = "0.1.5"
@@ -127,10 +127,13 @@ tempfile = "3.8"
 serial_test = "3.2"
 
 [features]
-default = ["pdf", "svg"]
+default = ["pdf", "djvu", "svg"]
 test-utils = []
 serde = []
-pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64", "rdjvu", "notify"]
+# PDF rendering (MuPDF). Does not include DjVu; add `djvu` feature for that.
+pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64", "notify"]
+# DjVu rendering (pure-Rust `djvu` crate). Implies `pdf`.
+djvu = ["rdjvu", "pdf"]
 profile = ["dep:pprof"]
 svg = ["resvg"]
 image-bmp = ["image/bmp"]

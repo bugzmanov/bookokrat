@@ -9,10 +9,14 @@
 //! The solution: Read raw bytes from stdin, demultiplex them:
 //! - Kitty responses (starting with `\x1b_G`) go to a separate queue
 //! - Everything else gets parsed as keyboard/mouse events
+//!
+//! Windows uses Crossterm console events directly, without Kitty response demultiplexing.
 
 use std::collections::VecDeque;
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
@@ -152,6 +156,7 @@ impl TerminalInput {
     }
 
     /// Read available bytes from stdin with timeout.
+    #[cfg(unix)]
     fn read_stdin(&mut self, timeout: Duration) -> io::Result<()> {
         let deadline = Instant::now() + timeout;
         let now = Instant::now();
@@ -199,10 +204,15 @@ impl TerminalInput {
         Ok(result > 0 && (pfd.revents & libc::POLLIN) != 0)
     }
 
+    // Crossterm owns the Windows console input queue, so take its parsed
+    // events instead of reading the same input as raw bytes.
     #[cfg(not(unix))]
-    fn poll_stdin(timeout: Duration) -> io::Result<bool> {
-        // On non-Unix, fall back to crossterm's poll
-        crossterm::event::poll(timeout).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    fn read_stdin(&mut self, mut timeout: Duration) -> io::Result<()> {
+        while crossterm::event::poll(timeout)? {
+            self.event_queue.push_back(crossterm::event::read()?);
+            timeout = Duration::ZERO;
+        }
+        Ok(())
     }
 
     /// Read from stdin without blocking.
@@ -215,11 +225,6 @@ impl TerminalInput {
         }
 
         Ok(result as usize)
-    }
-
-    #[cfg(not(unix))]
-    fn read_stdin_nonblocking(buf: &mut [u8]) -> io::Result<usize> {
-        std::io::stdin().read(buf)
     }
 
     /// Process the buffer to extract events and Kitty responses.

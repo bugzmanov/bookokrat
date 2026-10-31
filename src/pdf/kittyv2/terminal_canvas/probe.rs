@@ -1,11 +1,9 @@
-use std::ffi::CString;
-use std::io::{self, Read, Write};
-use std::os::unix::io::AsRawFd;
-use std::time::{Duration, Instant};
+use std::io::{self, Write};
+use std::time::Duration;
 
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-use crate::pdf::kittyv2::kgfx::{MemoryRegion, QueryCommand, Response, parse_response};
+use crate::pdf::kittyv2::kgfx::{MemoryRegion, QueryCommand, Response};
 use crate::pdf::kittyv2::terminal_canvas::types::TransferMode;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
@@ -45,11 +43,7 @@ fn probe_shared_memory() -> io::Result<bool> {
     let response = read_response_with_timeout(PROBE_TIMEOUT)?;
 
     // Clean up probe SHM - terminal has already read it by now
-    if let Ok(c_path) = CString::new(shm_path.as_str()) {
-        unsafe {
-            libc::shm_unlink(c_path.as_ptr());
-        }
-    }
+    let _ = region.unlink();
 
     match response {
         Some(response) => Ok(response.is_ok()),
@@ -57,7 +51,19 @@ fn probe_shared_memory() -> io::Result<bool> {
     }
 }
 
+#[cfg(not(unix))]
+fn read_response_with_timeout(_timeout: Duration) -> io::Result<Option<Response>> {
+    Ok(None)
+}
+
+#[cfg(unix)]
 fn read_response_with_timeout(timeout: Duration) -> io::Result<Option<Response>> {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+    use std::time::Instant;
+
+    use crate::pdf::kittyv2::kgfx::parse_response;
+
     let mut stdin = io::stdin();
     let fd = stdin.as_raw_fd();
     let start = Instant::now();

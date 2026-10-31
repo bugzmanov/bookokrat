@@ -17,7 +17,20 @@ use super::types::{CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageDa
 
 enum DocumentBackend {
     Pdf(Document),
+    #[cfg(feature = "djvu")]
     Djvu(rdjvu::Document),
+}
+
+#[cfg(feature = "djvu")]
+fn open_djvu_backend(path: &Path) -> Result<DocumentBackend, String> {
+    rdjvu::Document::open(path)
+        .map(DocumentBackend::Djvu)
+        .map_err(|e| format!("DjVu: {e}"))
+}
+
+#[cfg(not(feature = "djvu"))]
+fn open_djvu_backend(_path: &Path) -> Result<DocumentBackend, String> {
+    Err("DjVu support is not enabled in this build".to_string())
 }
 
 pub(crate) fn is_djvu_path(path: &Path) -> bool {
@@ -30,6 +43,7 @@ pub(crate) fn is_djvu_path(path: &Path) -> bool {
 const TITLE_RGB: (u8, u8, u8) = (0x66, 0x99, 0xCC);
 const TITLE_LUMA_DARK_MAX: u8 = 90;
 const TITLE_LUMA_LIGHT_MIN: u8 = 180;
+#[cfg(feature = "djvu")]
 const DJVU_INTERNAL_RENDER_SCALE: u32 = 1;
 
 fn align_raster_to_cells(
@@ -305,12 +319,12 @@ pub fn render_worker(
     reload_generation: Arc<std::sync::atomic::AtomicU64>,
 ) {
     let mut backend = if is_djvu_path(doc_path) {
-        match rdjvu::Document::open(doc_path) {
-            Ok(d) => DocumentBackend::Djvu(d),
+        match open_djvu_backend(doc_path) {
+            Ok(backend) => backend,
             Err(e) => {
                 let _ = responses.send(RenderResponse::Error {
                     id: RequestId::new(0),
-                    error: WorkerFault::generic(format!("DjVu: {e}")),
+                    error: WorkerFault::generic(e),
                 });
                 return;
             }
@@ -375,6 +389,7 @@ pub fn render_worker(
             RenderRequest::ExtractText { id, bounds, params } => {
                 let text = match &backend {
                     DocumentBackend::Pdf(doc) => extract_text(doc, &bounds, &params),
+                    #[cfg(feature = "djvu")]
                     DocumentBackend::Djvu(_) => String::new(),
                 };
                 let _ = responses.send(RenderResponse::ExtractedText { id, text });
@@ -410,6 +425,7 @@ fn handle_page_request_backend(
                 render_generation,
             );
         }
+        #[cfg(feature = "djvu")]
         DocumentBackend::Djvu(doc) => {
             handle_djvu_page_request(
                 doc,
@@ -1324,6 +1340,7 @@ fn extract_text(
 // DjVu rendering
 // ============================================================
 
+#[cfg(feature = "djvu")]
 fn handle_djvu_page_request(
     doc: &rdjvu::Document,
     id: RequestId,
@@ -1368,6 +1385,7 @@ fn handle_djvu_page_request(
     }
 }
 
+#[cfg(feature = "djvu")]
 fn render_djvu_page(
     doc: &rdjvu::Document,
     page_num: usize,
@@ -1447,6 +1465,7 @@ fn render_djvu_page(
     })
 }
 
+#[cfg(feature = "djvu")]
 fn render_djvu_page_rgb(
     page: &rdjvu::Page<'_>,
     page_num: usize,
@@ -1477,6 +1496,7 @@ fn render_djvu_page_rgb(
 /// original black pixels → `black` color, original white pixels → `white` color.
 /// Called as `tint(params.white, params.black)` — so foreground replaces black,
 /// background replaces white.
+#[cfg(feature = "djvu")]
 fn djvu_tint_rgb(pixels: &mut [u8], black: i32, white: i32) {
     let br = (black >> 16) & 0xFF;
     let bg = (black >> 8) & 0xFF;
@@ -1497,6 +1517,7 @@ fn djvu_tint_rgb(pixels: &mut [u8], black: i32, white: i32) {
     }
 }
 
+#[cfg(feature = "djvu")]
 fn djvu_pixmap_to_rgb(pixmap: &rdjvu::Pixmap) -> Vec<u8> {
     let pixel_count = pixmap.width as usize * pixmap.height as usize;
     let mut out = Vec::with_capacity(pixel_count * 3);
@@ -1509,6 +1530,7 @@ fn djvu_pixmap_to_rgb(pixmap: &rdjvu::Pixmap) -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "djvu")]
 pub(crate) fn extract_djvu_line_bounds(
     page: &rdjvu::Page<'_>,
     page_height: f32,
@@ -1517,6 +1539,7 @@ pub(crate) fn extract_djvu_line_bounds(
     extract_djvu_line_bounds_with_scales(page, page_height, scale, scale)
 }
 
+#[cfg(feature = "djvu")]
 fn extract_djvu_line_bounds_with_scales(
     page: &rdjvu::Page<'_>,
     page_height: f32,
@@ -1741,12 +1764,14 @@ fn extract_djvu_line_bounds_with_scales(
     bounds
 }
 
+#[cfg(feature = "djvu")]
 struct DjvuRasterSpec {
     output_width: f32,
     output_height: f32,
     achieved_scale: f32,
 }
 
+#[cfg(feature = "djvu")]
 impl DjvuRasterSpec {
     fn compute(
         page_bounds: (f32, f32),

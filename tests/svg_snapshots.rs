@@ -626,7 +626,10 @@ fn create_test_app_isolated() -> (App, TempDir) {
         RuntimeSettings::in_memory(Settings::default()),
     );
     // Force graphics support so PDFs show up regardless of sandbox env vars.
-    app.book_manager.supports_graphics = true;
+    #[cfg(feature = "pdf")]
+    {
+        app.book_manager.supports_graphics = true;
+    }
     app.navigation_panel
         .book_list
         .set_books(app.book_manager.get_books());
@@ -1535,6 +1538,7 @@ fn test_list_comment_rendering_complex_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_content_view_svg() {
@@ -1602,6 +1606,7 @@ fn test_open_at_chapter_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_content_scrolling_svg() {
@@ -1695,7 +1700,10 @@ fn test_dual_column_page_grid_svg() {
         None,
         RuntimeSettings::in_memory(settings),
     );
-    app.book_manager.supports_graphics = true;
+    #[cfg(feature = "pdf")]
+    {
+        app.book_manager.supports_graphics = true;
+    }
     app.navigation_panel
         .book_list
         .set_books(app.book_manager.get_books());
@@ -1912,6 +1920,7 @@ fn test_mouse_scroll_file_list_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_mouse_scroll_bounds_checking_svg() {
@@ -1977,6 +1986,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_mouse_event_batching_svg() {
@@ -2067,6 +2077,7 @@ fn test_mouse_event_batching_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_horizontal_scroll_handling_svg() {
@@ -2194,6 +2205,7 @@ fn test_horizontal_scroll_handling_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_edge_case_mouse_coordinates_svg() {
@@ -2290,6 +2302,7 @@ fn test_edge_case_mouse_coordinates_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_text_selection_svg() {
@@ -2462,6 +2475,7 @@ fn test_text_selection_with_auto_scroll_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_continuous_auto_scroll_down_svg() {
@@ -2575,6 +2589,7 @@ fn test_continuous_auto_scroll_down_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_continuous_auto_scroll_up_svg() {
@@ -2931,6 +2946,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_double_click_word_selection_svg() {
@@ -3027,6 +3043,7 @@ fn test_double_click_word_selection_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_triple_click_paragraph_selection_svg() {
@@ -3139,6 +3156,7 @@ fn test_triple_click_paragraph_selection_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_text_selection_click_on_book_text_bug_svg() {
@@ -3291,6 +3309,7 @@ fn test_toc_navigation_bug_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_toc_back_to_books_list_svg() {
@@ -3552,7 +3571,9 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_page: None,
             pdf_zoom: None,
             pdf_pan: None,
+            #[cfg(feature = "pdf")]
             pdf_invert_images: None,
+            #[cfg(feature = "pdf")]
             pdf_themed_rendering: None,
             book_progress: None,
             total_nodes: None,
@@ -3578,7 +3599,9 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_page: None,
             pdf_zoom: None,
             pdf_pan: None,
+            #[cfg(feature = "pdf")]
             pdf_invert_images: None,
+            #[cfg(feature = "pdf")]
             pdf_themed_rendering: None,
             book_progress: None,
             total_nodes: None,
@@ -4792,6 +4815,7 @@ fn test_toc_search_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[serial]
 fn test_theme_selector_modal_svg() {
@@ -4843,6 +4867,7 @@ fn test_theme_selector_modal_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[serial]
 fn test_theme_catppuccin_mocha_applied_svg() {
@@ -8249,6 +8274,7 @@ fn test_book_stats_popup_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_reading_history_navigation_svg() {
@@ -8310,6 +8336,7 @@ fn test_reading_history_navigation_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_comments_viewer_jump_to_comment_svg() {
@@ -8356,6 +8383,7 @@ fn test_comments_viewer_delete_comment_svg() {
     );
 }
 
+#[cfg(feature = "pdf")]
 #[test]
 #[parallel]
 fn test_keybinding_errors_popup_svg() {
@@ -8387,6 +8415,7 @@ fn test_keybinding_errors_popup_svg() {
 }
 
 #[cfg(unix)]
+#[cfg(feature = "pdf")]
 #[test]
 #[serial]
 fn test_lookup_popup_svg() {

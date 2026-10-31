@@ -1,5 +1,6 @@
 use std::ffi::CString;
 
+use super::region::sys;
 use super::{
     LifecycleTracker, record_shm_create, record_shm_unlink_error, record_shm_unlink_success,
 };
@@ -48,16 +49,12 @@ impl Drop for ShmLease {
         }
 
         if let Ok(c_path) = CString::new(self.path.as_str()) {
-            let result = unsafe { libc::shm_unlink(c_path.as_ptr()) };
-            if result < 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::ENOENT) {
-                    record_shm_unlink_success();
-                } else {
-                    record_shm_unlink_error();
+            match sys::unlink(&c_path) {
+                Ok(()) => record_shm_unlink_success(),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    record_shm_unlink_success()
                 }
-            } else {
-                record_shm_unlink_success();
+                Err(_) => record_shm_unlink_error(),
             }
         } else {
             record_shm_unlink_error();

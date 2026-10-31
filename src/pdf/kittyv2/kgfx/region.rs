@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::fmt;
 use std::io::{self, Error, ErrorKind};
 use std::ptr;
@@ -109,11 +109,7 @@ impl MemoryRegion {
         let c_path = CString::new(self.path.as_str())
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "path contains null byte"))?;
 
-        if unsafe { libc::shm_unlink(c_path.as_ptr()) } < 0 {
-            return Err(Error::last_os_error());
-        }
-
-        Ok(())
+        sys::unlink(&c_path)
     }
 
     /// Returns the shared memory path.
@@ -144,11 +140,67 @@ impl MemoryRegion {
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "path contains null byte"))?;
 
         if unlink_existing {
-            unsafe {
-                libc::shm_unlink(c_path.as_ptr());
-            }
+            let _ = sys::unlink(&c_path);
         }
 
+        let (ptr, fd) = sys::open_and_map(&c_path, size, exclusive)?;
+
+        Ok(Self {
+            path: path.to_string(),
+            ptr,
+            size,
+            fd,
+        })
+    }
+}
+
+impl Drop for MemoryRegion {
+    fn drop(&mut self) {
+        // Unmap memory if pointer is valid
+        if !self.ptr.is_null() {
+            unsafe {
+                sys::unmap(self.ptr, self.size);
+            }
+            self.ptr = ptr::null_mut();
+        }
+
+        // Close file descriptor if open
+        if self.fd >= 0 {
+            unsafe {
+                libc::close(self.fd);
+            }
+            self.fd = -1;
+        }
+
+        // Intentionally do NOT unlink - the terminal needs to read the data
+    }
+}
+
+/// POSIX shared memory primitives. Windows has no POSIX shm, so every operation
+/// fails with `Unsupported` there and callers fall back to chunked transmission.
+pub(crate) mod sys {
+    use super::*;
+
+    #[cfg(unix)]
+    pub(crate) fn unlink(c_path: &CStr) -> io::Result<()> {
+        if unsafe { libc::shm_unlink(c_path.as_ptr()) } < 0 {
+            return Err(Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn unlink(_c_path: &CStr) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    /// Creates (or opens) the region, sizes it and maps it read/write.
+    #[cfg(unix)]
+    pub(crate) fn open_and_map(
+        c_path: &CStr,
+        size: usize,
+        exclusive: bool,
+    ) -> io::Result<(*mut u8, libc::c_int)> {
         let mut flags = libc::O_RDWR | libc::O_CREAT;
         if exclusive {
             flags |= libc::O_EXCL;
@@ -199,34 +251,36 @@ impl MemoryRegion {
             return Err(err);
         }
 
-        Ok(Self {
-            path: path.to_string(),
-            ptr: ptr as *mut u8,
-            size,
-            fd,
-        })
+        Ok((ptr as *mut u8, fd))
     }
-}
 
-impl Drop for MemoryRegion {
-    fn drop(&mut self) {
-        // Unmap memory if pointer is valid
-        if !self.ptr.is_null() {
-            unsafe {
-                libc::munmap(self.ptr as *mut libc::c_void, self.size);
-            }
-            self.ptr = ptr::null_mut();
+    #[cfg(not(unix))]
+    pub(crate) fn open_and_map(
+        _c_path: &CStr,
+        _size: usize,
+        _exclusive: bool,
+    ) -> io::Result<(*mut u8, libc::c_int)> {
+        Err(unsupported())
+    }
+
+    /// # Safety
+    /// `ptr` and `size` must come from a successful `open_and_map`.
+    #[cfg(unix)]
+    pub(crate) unsafe fn unmap(ptr: *mut u8, size: usize) {
+        unsafe {
+            libc::munmap(ptr as *mut libc::c_void, size);
         }
+    }
 
-        // Close file descriptor if open
-        if self.fd >= 0 {
-            unsafe {
-                libc::close(self.fd);
-            }
-            self.fd = -1;
-        }
+    #[cfg(not(unix))]
+    pub(crate) unsafe fn unmap(_ptr: *mut u8, _size: usize) {}
 
-        // Intentionally do NOT unlink - the terminal needs to read the data
+    #[cfg(not(unix))]
+    fn unsupported() -> Error {
+        Error::new(
+            ErrorKind::Unsupported,
+            "POSIX shared memory is not available on this platform",
+        )
     }
 }
 
@@ -289,6 +343,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_create_and_write() {
         let mut region = MemoryRegion::create_with_pattern("kgfx-test-*", 1024)
             .expect("failed to create region");
@@ -305,6 +360,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_write_overflow() {
         let mut region =
             MemoryRegion::create_with_pattern("kgfx-test-*", 10).expect("failed to create region");
@@ -323,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_name_collision_handling() {
         // Create region A with explicit name
         let region_a =
@@ -340,6 +397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_debug_format() {
         let region =
             MemoryRegion::create_with_pattern("kgfx-dbg-*", 1024).expect("failed to create region");
@@ -353,5 +411,12 @@ mod tests {
         assert!(!debug_str.contains("ptr"));
 
         region.unlink().expect("failed to unlink");
+    }
+
+    #[test]
+    #[cfg(not(unix))]
+    fn shared_memory_is_unsupported() {
+        let err = MemoryRegion::create_with_pattern("kgfx-test-*", 1024).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
     }
 }

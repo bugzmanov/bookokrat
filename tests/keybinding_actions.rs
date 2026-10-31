@@ -97,12 +97,14 @@ fn simulate(app: &mut App, notation: &str) -> Option<AppAction> {
 
 macro_rules! binding_tests {
     ($(
+        $(#[$attr:meta])*
         $test_name:ident : $ctx:expr, $notation:expr,
         setup = |$app:ident, $dir:ident| $setup:expr,
         $(after = |$after_app:ident| $after:expr,)?
         check = |$app2:ident| $check:expr
     );* $(;)?) => {
         $(
+            $(#[$attr])*
             #[test]
             #[serial]
             fn $test_name() {
@@ -185,6 +187,7 @@ binding_tests! {
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| app.text_reader().testing_hud_message() == Some("No annotation under the cursor") && !app.text_reader().is_annotation_peek_open();
     // <Space>s opens settings popup (with pdf feature, which is default)
+    #[cfg(feature = "pdf")]
     global_space_s: KeyContext::Global, "<Space>s",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.settings_popup().is_some()
@@ -205,8 +208,11 @@ binding_tests! {
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| {
             // Suspend is unix-only; on other platforms the dispatcher is a no-op
-            // but still consumes the key — just assert the app didn't quit.
-            if cfg!(unix) { app.pending_suspend } else { true }
+            // but still consumes the key; there is no suspend state to inspect.
+            #[cfg(unix)]
+            { app.pending_suspend }
+            #[cfg(not(unix))]
+            { true }
         };
     // Ctrl+R reloads keybindings; with no user config, reload is a no-op but the
     // action still dispatches successfully (notification fires, no popup).
@@ -252,6 +258,7 @@ binding_tests! {
     global_ctrl_l: KeyContext::Global, "<C-l>",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.pending_force_redraw;
+    #[cfg(feature = "pdf")]
     global_ctrl_s: KeyContext::Global, "<C-s>",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.settings_popup().is_some()

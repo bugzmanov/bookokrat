@@ -9,15 +9,14 @@ pub mod image;
 pub mod kgfx;
 pub mod terminal_canvas;
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::layout::Position;
-use std::os::unix::io::AsRawFd;
 
 static IS_TMUX: OnceLock<bool> = OnceLock::new();
 static USE_KITTY_TMUX_PLACEHOLDER_ANCHORS: AtomicBool = AtomicBool::new(false);
@@ -458,6 +457,11 @@ pub fn dump_shm_state() {
 pub fn probe_delete_range_support() -> bool {
     const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
+    // Probe replies can only be read back on unix; don't leave them in stdin.
+    if cfg!(not(unix)) {
+        return false;
+    }
+
     let _ = enable_raw_mode();
 
     let id_a = NonZeroU32::new(90001).unwrap();
@@ -522,6 +526,11 @@ pub fn probe_relative_placement_support() -> bool {
     const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
     const PROBE_IMAGE_ID: u32 = 90003;
     const MISSING_PARENT_ID: u32 = 90004;
+
+    // Probe replies can only be read back on unix; don't leave them in stdin.
+    if cfg!(not(unix)) {
+        return false;
+    }
 
     let _ = enable_raw_mode();
 
@@ -598,12 +607,25 @@ fn read_response_with_timeout(timeout: Duration) -> io::Result<Option<kgfx::Resp
     read_response_matching(timeout, |_| true)
 }
 
+#[cfg(not(unix))]
+fn read_response_matching(
+    _timeout: Duration,
+    _accept: impl Fn(&kgfx::Response) -> bool,
+) -> io::Result<Option<kgfx::Response>> {
+    Ok(None)
+}
+
 /// Reads graphics responses until one satisfies `accept`, skipping stale
 /// replies (e.g. a late answer to an earlier probe that timed out).
+#[cfg(unix)]
 fn read_response_matching(
     timeout: Duration,
     accept: impl Fn(&kgfx::Response) -> bool,
 ) -> io::Result<Option<kgfx::Response>> {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+    use std::time::Instant;
+
     let mut stdin = io::stdin();
     let fd = stdin.as_raw_fd();
     let start = Instant::now();
