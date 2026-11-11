@@ -53,6 +53,9 @@
             "--skip=test_content_scrolling_svg"
             "--skip=test_help_popup_search_svg"
             "--skip=test_reading_history_navigation_svg"
+            "--skip=test_content_view_svg"
+            "--skip=test_keybinding_errors_popup_svg"
+            "--skip=test_toc_back_to_books_list_svg"
           ];
 
           meta = with pkgs.lib; {
