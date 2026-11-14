@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use log::info;
 
+use super::region::sys;
+
 /// Default region size: 32 MB.
 const DEFAULT_REGION_SIZE: usize = 32 * 1024 * 1024;
 
@@ -35,55 +37,13 @@ impl PoolSlot {
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "path contains null byte"))?;
 
         // Unlink any existing region first
-        unsafe {
-            libc::shm_unlink(c_path.as_ptr());
-        }
+        let _ = sys::unlink(&c_path);
 
-        // Apple declares shm_open as variadic, so mode must be promoted to c_uint;
-        // elsewhere it takes mode_t (u16 on FreeBSD, u32 on Linux).
-        #[cfg(target_vendor = "apple")]
-        let mode = (libc::S_IRUSR | libc::S_IWUSR) as libc::c_uint;
-        #[cfg(not(target_vendor = "apple"))]
-        let mode = libc::S_IRUSR | libc::S_IWUSR;
-
-        let fd = unsafe { libc::shm_open(c_path.as_ptr(), libc::O_RDWR | libc::O_CREAT, mode) };
-
-        if fd < 0 {
-            return Err(Error::last_os_error());
-        }
-
-        if unsafe { libc::ftruncate(fd, size as libc::off_t) } < 0 {
-            let err = Error::last_os_error();
-            unsafe {
-                libc::close(fd);
-                libc::shm_unlink(c_path.as_ptr());
-            }
-            return Err(err);
-        }
-
-        let ptr = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            )
-        };
-
-        if ptr == libc::MAP_FAILED {
-            let err = Error::last_os_error();
-            unsafe {
-                libc::close(fd);
-                libc::shm_unlink(c_path.as_ptr());
-            }
-            return Err(err);
-        }
+        let (ptr, fd) = sys::open_and_map(&c_path, size, false)?;
 
         Ok(Self {
             path: path.to_string(),
-            ptr: ptr as *mut u8,
+            ptr,
             size,
             fd,
             last_used: None,
@@ -113,9 +73,7 @@ impl PoolSlot {
     /// Unlinks the shared memory path.
     fn unlink(&self) {
         if let Ok(c_path) = CString::new(self.path.as_str()) {
-            unsafe {
-                libc::shm_unlink(c_path.as_ptr());
-            }
+            let _ = sys::unlink(&c_path);
         }
     }
 }
@@ -125,7 +83,7 @@ impl Drop for PoolSlot {
         // Unmap memory
         if !self.ptr.is_null() {
             unsafe {
-                libc::munmap(self.ptr as *mut libc::c_void, self.size);
+                sys::unmap(self.ptr, self.size);
             }
             self.ptr = ptr::null_mut();
         }
@@ -344,7 +302,7 @@ pub fn pool() -> &'static Mutex<RegionPool> {
     POOL.get_or_init(|| Mutex::new(RegionPool::new()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};

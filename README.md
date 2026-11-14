@@ -72,12 +72,30 @@ xcode-select --install
 ```
 
 **Windows:**
-Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with the \"Desktop development with C++\" workload.
+Install [MSYS2](https://www.msys2.org/) and run the following in its **UCRT64**
+shell (with Rust available on `PATH`):
+
+```bash
+pacman -S --needed base-devel mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-clang
+rustup override set stable-x86_64-pc-windows-gnu
+export AR="$(cygpath -m /ucrt64/bin/ar.exe)"
+export RANLIB="$(cygpath -m /ucrt64/bin/ranlib.exe)"
+export LIBCLANG_PATH="$(cygpath -w /ucrt64/bin)"
+cargo build --locked --release
+```
+
+To bundle `target/release/bookokrat.exe` with its runtime DLLs into a ZIP
+(requires `7z` on `PATH`):
+
+```bash
+bash tools/package_windows.sh target/release/bookokrat.exe bookokrat-windows.zip
+```
 
 > **Windows notes:**
-> - PDF/DJVU might not work in Windows PowerShell.
+> - PDF/DjVu need a terminal with image support (e.g. Windows Terminal or WezTerm).
 > - For full Kitty graphics protocol support, consider using WSL with [Ghostty](https://ghostty.org/) or [Kitty](https://sw.kovidgoyal.net/kitty/).
-> - If MuPDF fails to build, disable PDF/DJVU support: `cargo install bookokrat --no-default-features`
+> - `--synctex-forward` (editor → viewer) is not supported on native Windows.
+> - For EPUB-only, build with `--no-default-features`.
 
 </details>
 

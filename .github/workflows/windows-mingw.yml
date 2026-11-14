@@ -1,0 +1,109 @@
+# Native Windows build with MSYS2 UCRT64 (GNU make for MuPDF; no Visual Studio).
+# Run toolchain steps under MSYS2, and package smoke tests under PowerShell.
+
+name: Windows – native MinGW build
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Allow uploading to an existing release created by release.yml
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows-gnu:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Inherit the Rust installation from the Windows PATH.
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-clang
+
+      # GNU host toolchain, so build scripts link with MinGW instead of MSVC.
+      - name: Install Rust (stable-x86_64-pc-windows-gnu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+
+      - name: Configure and verify MuPDF tools
+        shell: msys2 {0}
+        run: |
+          # MSYS2's MinGW binutils are unprefixed. Use Windows paths so both
+          # native Cargo/cc and MuPDF's makefiles find the UCRT64 executables.
+          ar_path=$(cygpath -m /ucrt64/bin/ar.exe)
+          ranlib_path=$(cygpath -m /ucrt64/bin/ranlib.exe)
+          "$ar_path" --version
+          "$ranlib_path" --version
+          echo "AR=$ar_path" >> "$GITHUB_ENV"
+          echo "RANLIB=$ranlib_path" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(cygpath -w /ucrt64/bin)" >> "$GITHUB_ENV"
+
+      - name: Check feature configurations and run platform tests
+        shell: msys2 {0}
+        run: |
+          cargo check --locked --tests
+          cargo check --locked --tests --no-default-features --features pdf,svg
+          cargo check --locked --tests --no-default-features
+          cargo test --locked --lib pdf::kittyv2::kgfx::region::tests
+          cargo test --locked --lib pdf::synctex::tests
+
+      - name: Build
+        shell: msys2 {0}
+        run: cargo build --locked --release
+
+      # ── Package ───────────────────────────────────────────────────────────
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=dev-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package
+        shell: msys2 {0}
+        env:
+          BUILD_TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          ARCHIVE="bookokrat-${BUILD_TAG}-x86_64-pc-windows-gnu.zip"
+          bash tools/package_windows.sh target/release/bookokrat.exe "$ARCHIVE"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Smoke test extracted package without MSYS2
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP "bookokrat-smoke"
+          Expand-Archive -LiteralPath $env:ARCHIVE -DestinationPath $packageDir -Force
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $executable = Join-Path $packageDir "bookokrat.exe"
+          & $executable --help
+          if ($LASTEXITCODE -ne 0) { throw "Packaged --help failed: $LASTEXITCODE" }
+          & $executable --version
+          if ($LASTEXITCODE -ne 0) { throw "Packaged --version failed: $LASTEXITCODE" }
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256

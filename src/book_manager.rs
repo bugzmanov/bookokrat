@@ -714,7 +714,7 @@ impl BookManager {
             "html" | "htm" => Some(BookFormat::Html),
             #[cfg(feature = "pdf")]
             "pdf" => Some(BookFormat::Pdf),
-            #[cfg(feature = "pdf")]
+            #[cfg(feature = "djvu")]
             "djvu" | "djv" => Some(BookFormat::Djvu),
             _ => None,
         }
@@ -726,7 +726,7 @@ impl BookManager {
         let is_pdf = head[..head.len().min(1024)]
             .windows(5)
             .any(|w| w == b"%PDF-");
-        let is_djvu = head.starts_with(b"AT&TFORM");
+        let is_djvu = cfg!(feature = "djvu") && head.starts_with(b"AT&TFORM");
         if is_pdf || is_djvu {
             #[cfg(feature = "pdf")]
             return Some(if is_pdf {
@@ -813,6 +813,7 @@ mod tests {
         let mut too_late = vec![b' '; 1024];
         too_late.extend_from_slice(b"%PDF-1.4");
         assert_eq!(BookManager::sniff_format(&too_late), None);
+        #[cfg(feature = "djvu")]
         assert_eq!(
             BookManager::sniff_format(b"AT&TFORM\x00\x00\x00\x00DJVU"),
             Some(BookFormat::Djvu)
@@ -821,9 +822,14 @@ mod tests {
 
     #[test]
     fn extension_round_trips_through_detect_format() {
-        let mut formats = vec![BookFormat::Epub, BookFormat::Html];
-        #[cfg(feature = "pdf")]
-        formats.extend([BookFormat::Pdf, BookFormat::Djvu]);
+        let formats = [
+            BookFormat::Epub,
+            BookFormat::Html,
+            #[cfg(feature = "pdf")]
+            BookFormat::Pdf,
+            #[cfg(feature = "djvu")]
+            BookFormat::Djvu,
+        ];
         for format in formats {
             let name = format!("stdin.{}", format.extension());
             assert_eq!(BookManager::detect_format(&name), Some(format));
@@ -922,7 +928,12 @@ mod tests {
             ..crate::settings::Settings::default()
         });
         let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap(), settings);
-        assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
+        let expected = if cfg!(feature = "djvu") { 3 } else { 2 };
+        assert_eq!(
+            manager.books.len(),
+            expected,
+            "all files should be discovered"
+        );
 
         let filtered = manager.get_books();
         let formats: Vec<_> = filtered.iter().map(|b| b.format).collect();
@@ -948,7 +959,12 @@ mod tests {
 
         let settings = RuntimeSettings::in_memory(crate::settings::Settings::default());
         let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap(), settings);
-        assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
+        let expected = if cfg!(feature = "djvu") { 3 } else { 2 };
+        assert_eq!(
+            manager.books.len(),
+            expected,
+            "all files should be discovered"
+        );
 
         // pdf_enabled is true (default) — simulating a user who has never toggled the setting.
         // But the terminal doesn't support graphics, so PDFs/DJVUs should still be hidden.

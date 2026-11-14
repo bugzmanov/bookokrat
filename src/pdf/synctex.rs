@@ -520,6 +520,7 @@ fn stable_path_hash(bytes: &[u8]) -> u64 {
 /// Parse a text command line into a SyncTexCommand.
 ///
 /// Format: `forward <line> <column> <file>`
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_command(line: &str) -> Option<SyncTexCommand> {
     let line = line.trim();
     if let Some(rest) = line.strip_prefix("forward ") {
@@ -553,6 +554,15 @@ impl SyncTexListener {
     /// Start listening on the given socket path.
     ///
     /// Commands are sent to `tx`. The listener thread runs until dropped.
+    #[cfg(not(unix))]
+    pub fn start(_socket_path: PathBuf, _tx: flume::Sender<SyncTexCommand>) -> Result<Self> {
+        anyhow::bail!("SyncTeX editor integration requires Unix domain sockets")
+    }
+
+    /// Start listening on the given socket path.
+    ///
+    /// Commands are sent to `tx`. The listener thread runs until dropped.
+    #[cfg(unix)]
     pub fn start(socket_path: PathBuf, tx: flume::Sender<SyncTexCommand>) -> Result<Self> {
         // Remove stale socket if it exists
         if socket_path.exists() {
@@ -593,6 +603,7 @@ impl SyncTexListener {
         })
     }
 
+    #[cfg(unix)]
     fn listener_loop(
         listener: std::os::unix::net::UnixListener,
         tx: flume::Sender<SyncTexCommand>,
@@ -652,6 +663,7 @@ impl Drop for SyncTexListener {
         self.shutdown
             .store(true, std::sync::atomic::Ordering::Relaxed);
         // Connect briefly to unblock the accept() call
+        #[cfg(unix)]
         let _ = std::os::unix::net::UnixStream::connect(&self.socket_path);
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
@@ -667,6 +679,20 @@ impl Drop for SyncTexListener {
 /// Send a forward search command to a running Bookokrat instance.
 ///
 /// Used by `--synctex-forward` CLI mode.
+#[cfg(not(unix))]
+pub fn send_forward_command(
+    _socket_path: &Path,
+    _file: &str,
+    _line: u32,
+    _column: u32,
+) -> Result<()> {
+    anyhow::bail!("SyncTeX editor integration requires Unix domain sockets")
+}
+
+/// Send a forward search command to a running Bookokrat instance.
+///
+/// Used by `--synctex-forward` CLI mode.
+#[cfg(unix)]
 pub fn send_forward_command(socket_path: &Path, file: &str, line: u32, column: u32) -> Result<()> {
     use std::io::Write;
 
@@ -974,6 +1000,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_socket_listener_roundtrip() {
         let tmp = tempfile::TempDir::new().unwrap();
         let socket_path = tmp.path().join("test.sock");

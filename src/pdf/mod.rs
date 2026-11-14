@@ -44,7 +44,9 @@ pub(crate) use types::link_visual_boxes;
 pub use types::{
     CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData, VecExt, ViewportUpdate,
 };
-pub(crate) use worker::{extract_djvu_line_bounds, is_djvu_path};
+#[cfg(feature = "djvu")]
+pub(crate) use worker::extract_djvu_line_bounds;
+pub(crate) use worker::is_djvu_path;
 pub use zoom::{ScrollDirection, Zoom};
 
 /// Default number of render workers

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
 
+use super::region::sys;
 use super::{record_shm_unlink_error, record_shm_unlink_success};
 
 /// Soft limit for queue size - cleanup starts when exceeded.
@@ -258,19 +259,17 @@ impl Default for LifecycleTracker {
 fn unlink_path(path: &str) {
     match CString::new(path) {
         Ok(c_path) => {
-            let result = unsafe { libc::shm_unlink(c_path.as_ptr()) };
-            if result < 0 {
-                let err = std::io::Error::last_os_error();
+            match sys::unlink(&c_path) {
+                Ok(()) => record_shm_unlink_success(),
                 // ENOENT is acceptable here: another owner may have already unlinked.
-                if err.raw_os_error() == Some(libc::ENOENT) {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     debug!("already unlinked {path}");
                     record_shm_unlink_success();
-                } else {
+                }
+                Err(err) => {
                     debug!("failed to unlink {path}: {err}");
                     record_shm_unlink_error();
                 }
-            } else {
-                record_shm_unlink_success();
             }
         }
         Err(e) => {
@@ -293,7 +292,7 @@ pub fn tracker() -> &'static Mutex<LifecycleTracker> {
     TRACKER.get_or_init(|| Mutex::new(LifecycleTracker::new()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::pdf::kittyv2::kgfx::MemoryRegion;
