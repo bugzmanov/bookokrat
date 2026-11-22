@@ -1,10 +1,5 @@
 //! ITerm2 protocol implementation.
-use std::{
-    cmp::min,
-    collections::{HashMap, HashSet},
-    fmt::Write,
-    io::Cursor,
-};
+use std::{cmp::min, collections::HashMap, fmt::Write, io::Cursor};
 
 use image::{DynamicImage, ImageBuffer, Rgb};
 use ratatui::{buffer::Buffer, layout::Rect};
@@ -220,60 +215,40 @@ impl Iterm2 {
 }
 
 /// Encode as indexed PNG if ≤256 colors, otherwise RGB PNG
-fn encode_optimized_png(img: &DynamicImage) -> Vec<u8> {
-    if img.color().has_alpha() {
-        let mut png_data: Vec<u8> = Vec::new();
-        img.write_to(&mut Cursor::new(&mut png_data), image::ImageFormat::Png)
-            .ok();
-        return png_data;
+fn encode_optimized_png(img: &DynamicImage) -> Result<Vec<u8>> {
+    if let Some(rgb) = img.as_rgb8()
+        && let Some(png) = encode_indexed_png(rgb)
+    {
+        return Ok(png);
     }
-    let rgb = img.to_rgb8();
-
-    // Collect unique colors (stop if >256)
-    let mut unique_colors: HashSet<[u8; 3]> = HashSet::new();
-    for pixel in rgb.pixels() {
-        unique_colors.insert(pixel.0);
-        if unique_colors.len() > 256 {
-            // Too many colors - use RGB PNG directly (skip expensive quantization)
-            let mut png_data: Vec<u8> = Vec::new();
-            img.write_to(&mut Cursor::new(&mut png_data), image::ImageFormat::Png)
-                .ok();
-            return png_data;
-        }
-    }
-
-    // ≤256 colors - use indexed PNG (much smaller)
-    if let Some(indexed_png) = encode_indexed_png(&rgb, &unique_colors) {
-        return indexed_png;
-    }
-
-    // Fallback: standard RGB PNG
-    let mut png_data: Vec<u8> = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png_data), image::ImageFormat::Png)
-        .ok();
-    png_data
+    let mut png = Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png)?;
+    Ok(png.into_inner())
 }
 
 /// Encode image as indexed PNG using the png crate directly
-fn encode_indexed_png(
-    rgb: &ImageBuffer<Rgb<u8>, Vec<u8>>,
-    unique_colors: &HashSet<[u8; 3]>,
-) -> Option<Vec<u8>> {
+fn encode_indexed_png(rgb: &image::RgbImage) -> Option<Vec<u8>> {
     let (width, height) = rgb.dimensions();
-
-    // Build palette
-    let palette: Vec<[u8; 3]> = unique_colors.iter().copied().collect();
-    let color_to_index: std::collections::HashMap<[u8; 3], u8> = palette
-        .iter()
-        .enumerate()
-        .map(|(i, &c)| (c, i as u8))
-        .collect();
-
-    // Build indexed pixel data
-    let mut indexed_pixels: Vec<u8> = Vec::with_capacity((width * height) as usize);
-    for pixel in rgb.pixels() {
-        let idx = color_to_index.get(&pixel.0)?;
-        indexed_pixels.push(*idx);
+    let mut lookup = HashMap::new();
+    let mut palette = Vec::new();
+    let mut indexed_pixels = Vec::with_capacity((rgb.as_raw().len() / 3).min(65536));
+    let mut previous = None;
+    let mut index = 0;
+    for &Rgb(color) in rgb.pixels() {
+        // Text pages have long runs of identical ink or paper. Map each run
+        // once; on a 257th distinct color use lossless RGB instead.
+        if previous != Some(color) {
+            index = match lookup.entry(color) {
+                std::collections::hash_map::Entry::Occupied(e) => *e.get(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    let next = u8::try_from(palette.len() / 3).ok()?;
+                    palette.extend_from_slice(&color);
+                    *e.insert(next)
+                }
+            };
+            previous = Some(color);
+        }
+        indexed_pixels.push(index);
     }
 
     // Encode using png crate
@@ -283,9 +258,7 @@ fn encode_indexed_png(
         encoder.set_color(png::ColorType::Indexed);
         encoder.set_depth(png::BitDepth::Eight);
 
-        // Flatten palette to [R, G, B, R, G, B, ...]
-        let flat_palette: Vec<u8> = palette.iter().flat_map(|c| c.iter().copied()).collect();
-        encoder.set_palette(flat_palette);
+        encoder.set_palette(palette);
 
         encoder.set_compression(png::Compression::Fast);
 
@@ -465,9 +438,7 @@ fn encode(
     is_tmux: bool,
     erase_first: bool,
 ) -> Result<String> {
-    let png = encode_optimized_png(img);
-
-    let data = base64_simd::STANDARD.encode_to_string(&png);
+    let png = encode_optimized_png(img)?;
 
     let (start, escape, end) = Parser::escape_tmux(is_tmux);
 
@@ -486,12 +457,15 @@ fn encode(
     // Use cell units for width/height
     write!(
         seq,
-        "{escape}]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=0;doNotMoveCursor=1:{}\x07{end}",
+        "{escape}]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=0;doNotMoveCursor=1:",
         png.len(),
         render_area.width,
         render_area.height,
-        data,
     )?;
+    seq.reserve(base64_simd::STANDARD.encoded_length(png.len()) + 1 + end.len());
+    base64_simd::STANDARD.encode_append(&png, &mut seq);
+    seq.push('\x07');
+    seq.push_str(end);
 
     Ok(seq)
 }

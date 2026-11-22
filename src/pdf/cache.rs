@@ -147,7 +147,7 @@ mod tests {
     fn test_page_data(page: usize) -> PageData {
         PageData {
             img_data: super::super::types::ImageData {
-                pixels: vec![0; 300],
+                source: crate::pdf::PageSource::Raster(vec![0; 300]),
                 width_px: 10,
                 height_px: 10,
                 width_cell: 10,

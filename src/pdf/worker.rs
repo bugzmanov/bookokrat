@@ -5,18 +5,18 @@ use std::sync::{Arc, Mutex};
 
 use flume::{Receiver, Sender};
 use mupdf::text_page::TextBlockType;
-use mupdf::{Colorspace, Document, Matrix, Page, Pixmap, TextPageFlags};
+use mupdf::{Colorspace, Document, IRect, Matrix, Page, Pixmap, TextPageFlags};
 use rayon::prelude::*;
 
-use super::KITTY_MAX_DIMENSION;
 use super::cache::{CacheKey, PageCache};
 use super::request::{
     PageSelectionBounds, RenderParams, RenderRequest, RenderResponse, RequestId, WorkerFault,
 };
-use super::types::{CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData};
+use super::types::{CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData, PageSource};
+use super::{CompiledPage, KITTY_MAX_DIMENSION};
 
 enum DocumentBackend {
-    Pdf(Document),
+    Pdf { doc: Document, compile: bool },
     Djvu(rdjvu::Document),
 }
 
@@ -303,6 +303,7 @@ pub fn render_worker(
     responses: Sender<RenderResponse>,
     cache: Arc<Mutex<PageCache>>,
     reload_generation: Arc<std::sync::atomic::AtomicU64>,
+    compile_pdf: bool,
 ) {
     let mut backend = if is_djvu_path(doc_path) {
         match rdjvu::Document::open(doc_path) {
@@ -317,7 +318,10 @@ pub fn render_worker(
         }
     } else {
         match Document::open(doc_path.to_string_lossy().as_ref()) {
-            Ok(d) => DocumentBackend::Pdf(d),
+            Ok(doc) => DocumentBackend::Pdf {
+                doc,
+                compile: compile_pdf,
+            },
             Err(e) => {
                 let _ = responses.send(RenderResponse::Error {
                     id: RequestId::new(0),
@@ -335,8 +339,11 @@ pub fn render_worker(
         let current_gen = reload_generation.load(std::sync::atomic::Ordering::Acquire);
         if current_gen != local_generation {
             match Document::open(doc_path.to_string_lossy().as_ref()) {
-                Ok(d) => {
-                    backend = DocumentBackend::Pdf(d);
+                Ok(doc) => {
+                    backend = DocumentBackend::Pdf {
+                        doc,
+                        compile: compile_pdf,
+                    };
                     local_generation = current_gen;
                     let _ = responses.send(RenderResponse::Reloaded {
                         generation: current_gen,
@@ -374,7 +381,7 @@ pub fn render_worker(
 
             RenderRequest::ExtractText { id, bounds, params } => {
                 let text = match &backend {
-                    DocumentBackend::Pdf(doc) => extract_text(doc, &bounds, &params),
+                    DocumentBackend::Pdf { doc, .. } => extract_text(doc, &bounds, &params),
                     DocumentBackend::Djvu(_) => String::new(),
                 };
                 let _ = responses.send(RenderResponse::ExtractedText { id, text });
@@ -398,41 +405,6 @@ fn handle_page_request_backend(
     responses: &Sender<RenderResponse>,
     render_generation: u64,
 ) {
-    match backend {
-        DocumentBackend::Pdf(doc) => {
-            handle_page_request(
-                doc,
-                id,
-                page_num,
-                params,
-                cache,
-                responses,
-                render_generation,
-            );
-        }
-        DocumentBackend::Djvu(doc) => {
-            handle_djvu_page_request(
-                doc,
-                id,
-                page_num,
-                params,
-                cache,
-                responses,
-                render_generation,
-            );
-        }
-    }
-}
-
-fn handle_page_request(
-    doc: &Document,
-    id: RequestId,
-    page_num: usize,
-    params: &RenderParams,
-    cache: &Arc<Mutex<PageCache>>,
-    responses: &Sender<RenderResponse>,
-    render_generation: u64,
-) {
     let key = CacheKey::from_params(page_num, params);
 
     let cached = cache
@@ -443,13 +415,21 @@ fn handle_page_request(
         let _ = responses.send(RenderResponse::Page {
             id,
             page: page_num,
-            data: Arc::clone(&cached),
+            data: cached,
             render_generation,
         });
         return;
     }
 
-    match render_page(doc, page_num, params) {
+    let result = match backend {
+        DocumentBackend::Pdf { doc, compile: true } => render_pdf_page(doc, page_num, params, true),
+        DocumentBackend::Pdf {
+            doc,
+            compile: false,
+        } => render_page(doc, page_num, params),
+        DocumentBackend::Djvu(doc) => render_djvu_page(doc, page_num, params),
+    };
+    match result {
         Ok(data) => {
             let cached = cache
                 .lock()
@@ -458,7 +438,7 @@ fn handle_page_request(
             let _ = responses.send(RenderResponse::Page {
                 id,
                 page: page_num,
-                data: Arc::clone(&cached),
+                data: cached,
                 render_generation,
             });
         }
@@ -473,6 +453,15 @@ pub fn render_page(
     doc: &Document,
     page_num: usize,
     params: &RenderParams,
+) -> Result<PageData, WorkerFault> {
+    render_pdf_page(doc, page_num, params, false)
+}
+
+fn render_pdf_page(
+    doc: &Document,
+    page_num: usize,
+    params: &RenderParams,
+    compile: bool,
 ) -> Result<PageData, WorkerFault> {
     let page = doc.load_page(page_num as i32)?;
 
@@ -508,54 +497,40 @@ pub fn render_page(
         (spec.output_height / f32::from(params.cell_size.height)) as u16,
     );
 
-    let rgb = Colorspace::device_rgb();
-    let mut pixmap = page.to_pixmap(&spec.transform, &rgb, params.transparent, false)?;
-    // MuPDF renders premultiplied alpha. Convert to straight alpha immediately so
-    // tinting and overlay blending downstream operate on true colors, and the
-    // Kitty f=32 encoder (which expects straight alpha) needs no conversion.
-    if params.transparent {
-        unpremultiply_pixmap(&mut pixmap);
-    }
-    let themed_rendering = params.black >= 0 && params.white >= 0;
-
-    let image_regions = if themed_rendering && !params.invert_images {
-        let rects = collect_image_rects(&page, spec.mag, pixmap.width(), pixmap.height());
-        stash_image_regions(&pixmap, &rects)
+    // Match fz_new_pixmap_from_page_contents exactly, including MuPDF's
+    // near-integer rounding and the origin for a translated page box.
+    let bbox = bounds.transform(&spec.transform).round();
+    let width_px = bbox.width() as u32;
+    let height_px = bbox.height() as u32;
+    let paint = PagePaint::collect(&page, &spec.transform, page_bounds.0, params);
+    let (source, channels) = if compile {
+        // false = page contents only, just like the legacy to_pixmap call.
+        let list = page.to_display_list(false)?;
+        (
+            PageSource::Compiled(Arc::new(CompiledPage::new(
+                list,
+                spec.transform,
+                bbox,
+                paint,
+            ))),
+            if params.transparent { 4 } else { 3 },
+        )
     } else {
-        Vec::new()
+        let rgb = Colorspace::device_rgb();
+        let mut pixmap = page.to_pixmap(&spec.transform, &rgb, params.transparent, false)?;
+        let (pixels, channels) = paint.pixels(&mut pixmap)?;
+        (PageSource::Raster(pixels), channels)
     };
 
-    if themed_rendering {
-        pixmap.tint(params.white, params.black)?;
-    }
-
-    if themed_rendering && !image_regions.is_empty() {
-        restore_image_regions(&mut pixmap, &image_regions);
-    }
-
-    if themed_rendering
-        && let Ok(title_rects) = collect_title_rects(&page, spec.mag, page_bounds.0)
-        && !title_rects.is_empty()
-    {
-        apply_title_color(&mut pixmap, &title_rects, true);
-    }
-
-    let (base_dpi_x, base_dpi_y) = pixmap.resolution();
-    pixmap.set_resolution(
-        (base_dpi_x as f32 * spec.mag) as i32,
-        (base_dpi_y as f32 * spec.mag) as i32,
-    );
-
-    let line_bounds = extract_line_bounds_merged(&page, spec.mag);
-    let link_rects = extract_link_rects(&page, spec.mag);
-
-    let (pixels, channels) = pixmap_to_pixels(&pixmap, params.transparent)?;
+    let origin = (bbox.x0 as f32, bbox.y0 as f32);
+    let line_bounds = merge_same_row_lines(extract_line_bounds_at(&page, spec.mag, origin));
+    let link_rects = extract_link_rects_at(&page, spec.mag, origin);
 
     Ok(PageData {
         img_data: ImageData {
-            pixels,
-            width_px: pixmap.width(),
-            height_px: pixmap.height(),
+            source,
+            width_px,
+            height_px,
             width_cell: (spec.output_width / f32::from(params.cell_size.width)) as u16,
             height_cell: (spec.output_height / f32::from(params.cell_size.height)) as u16,
             channels,
@@ -572,12 +547,59 @@ pub fn render_page(
     })
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ImageRect {
-    x0: usize,
-    y0: usize,
-    x1: usize,
-    y1: usize,
+/// Scale-dependent analysis shared by raster output and all clipped replays.
+pub(super) struct PagePaint {
+    pub(super) transparent: bool,
+    tint: Option<(i32, i32)>,
+    image_rects: Vec<IRect>,
+    title_rects: Vec<IRect>,
+}
+
+impl PagePaint {
+    fn collect(page: &Page, transform: &Matrix, page_width: f32, params: &RenderParams) -> Self {
+        let tint = (params.black >= 0 && params.white >= 0).then_some((params.white, params.black));
+        let image_rects = if tint.is_some() && !params.invert_images {
+            collect_image_rects(page, transform)
+        } else {
+            Vec::new()
+        };
+        let title_rects = if tint.is_some() {
+            collect_title_rects(page, transform, page_width).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Self {
+            transparent: params.transparent,
+            tint,
+            image_rects,
+            title_rects,
+        }
+    }
+
+    pub(super) fn pixels(&self, pixmap: &mut Pixmap) -> Result<(Vec<u8>, u8), WorkerFault> {
+        // MuPDF paints premultiplied alpha; the tint/overlay stages need straight alpha.
+        if self.transparent {
+            unpremultiply_pixmap(pixmap);
+        }
+        if let Some((ink, paper)) = self.tint {
+            let bbox = pixmap.rect();
+            if self.image_rects.iter().any(|rect| {
+                rect.x0 <= bbox.x0 && rect.y0 <= bbox.y0 && rect.x1 >= bbox.x1 && rect.y1 >= bbox.y1
+            }) {
+                // Common for scanned pages: the entire band retains its colors.
+                // Don't save a second copy or tint bytes we'd immediately restore.
+                if self.transparent {
+                    flatten_onto_white(pixmap.samples_mut());
+                }
+            } else {
+                let images = stash_image_regions(pixmap, &self.image_rects);
+                pixmap.tint(ink, paper)?;
+                restore_image_regions(pixmap, &images);
+            }
+            apply_title_color(pixmap, &self.title_rects, true);
+        }
+        pixmap_to_pixels(pixmap, self.transparent)
+    }
 }
 
 #[derive(Debug)]
@@ -589,75 +611,66 @@ struct ImageRegion {
     data: Vec<u8>,
 }
 
-fn collect_image_rects(page: &Page, scale_factor: f32, width: u32, height: u32) -> Vec<ImageRect> {
+fn collect_image_rects(page: &Page, transform: &Matrix) -> Vec<IRect> {
     let flags = TextPageFlags::PRESERVE_IMAGES | TextPageFlags::ACCURATE_BBOXES;
     let Ok(text_page) = page.to_text_page(flags) else {
         return Vec::new();
     };
-    let max_x = width as f32;
-    let max_y = height as f32;
 
     text_page
         .blocks()
         .filter(|block| block.r#type() == TextBlockType::Image)
-        .filter_map(|block| {
-            let bbox = block.bounds();
-            let mut x0 = (bbox.x0 * scale_factor).floor();
-            let mut y0 = (bbox.y0 * scale_factor).floor();
-            let mut x1 = (bbox.x1 * scale_factor).ceil();
-            let mut y1 = (bbox.y1 * scale_factor).ceil();
-
-            if x1 <= 0.0 || y1 <= 0.0 || x0 >= max_x || y0 >= max_y {
-                return None;
-            }
-
-            x0 = x0.max(0.0);
-            y0 = y0.max(0.0);
-            x1 = x1.min(max_x);
-            y1 = y1.min(max_y);
-
-            let x0 = x0 as usize;
-            let y0 = y0 as usize;
-            let x1 = x1 as usize;
-            let y1 = y1 as usize;
-
-            if x0 >= x1 || y0 >= y1 {
-                None
-            } else {
-                Some(ImageRect { x0, y0, x1, y1 })
-            }
+        .map(|block| {
+            let bbox = block.bounds().transform(transform);
+            IRect::new(
+                bbox.x0.floor() as i32,
+                bbox.y0.floor() as i32,
+                bbox.x1.ceil() as i32,
+                bbox.y1.ceil() as i32,
+            )
         })
         .collect()
 }
 
-fn stash_image_regions(pixmap: &Pixmap, rects: &[ImageRect]) -> Vec<ImageRegion> {
+/// Intersect a device-space rectangle with this pixmap, then rebase to its buffer.
+fn local_rect(rect: &IRect, bbox: &IRect) -> Option<IRect> {
+    let r = rect.intersect(bbox);
+    (!r.is_empty()).then(|| {
+        IRect::new(
+            r.x0 - bbox.x0,
+            r.y0 - bbox.y0,
+            r.x1 - bbox.x0,
+            r.y1 - bbox.y0,
+        )
+    })
+}
+
+fn stash_image_regions(pixmap: &Pixmap, rects: &[IRect]) -> Vec<ImageRegion> {
     if rects.is_empty() {
         return Vec::new();
     }
 
     let n = pixmap.n() as usize;
     let width = pixmap.width() as usize;
+    let bbox = pixmap.rect();
     let samples = pixmap.samples();
-    let mut regions = Vec::with_capacity(rects.len());
+    let mut regions = Vec::new();
 
-    for rect in rects {
-        let rect_width = rect.x1.saturating_sub(rect.x0);
-        let rect_height = rect.y1.saturating_sub(rect.y0);
-        if rect_width == 0 || rect_height == 0 {
-            continue;
-        }
+    for rect in rects.iter().filter_map(|rect| local_rect(rect, &bbox)) {
+        let rect_width = rect.width() as usize;
+        let rect_height = rect.height() as usize;
 
         let row_bytes = rect_width * n;
         let mut data = Vec::with_capacity(rect_width * rect_height * n);
         for y in rect.y0..rect.y1 {
-            let row_start = (y * width + rect.x0) * n;
+            let row_start = (y as usize * width + rect.x0 as usize) * n;
             let row_end = row_start + row_bytes;
             data.extend_from_slice(&samples[row_start..row_end]);
         }
 
         regions.push(ImageRegion {
-            x0: rect.x0,
-            y0: rect.y0,
+            x0: rect.x0 as usize,
+            y0: rect.y0 as usize,
             width: rect_width,
             height: rect_height,
             data,
@@ -772,6 +785,9 @@ fn pixmap_to_pixels(pixmap: &Pixmap, keep_alpha: bool) -> Result<(Vec<u8>, u8), 
 
     let want_rgba = keep_alpha && pixmap.alpha() && n >= 4;
     let out_channels: u8 = if want_rgba { 4 } else { 3 };
+    if n == usize::from(out_channels) && stride == row_bytes {
+        return Ok((samples.to_vec(), out_channels));
+    }
     let mut out = Vec::with_capacity(width * height * out_channels as usize);
     for y in 0..height {
         let row_start = y * stride;
@@ -790,6 +806,10 @@ fn pixmap_to_pixels(pixmap: &Pixmap, keep_alpha: bool) -> Result<(Vec<u8>, u8), 
 }
 
 pub(crate) fn extract_line_bounds(page: &Page, scale_factor: f32) -> Vec<LineBounds> {
+    extract_line_bounds_at(page, scale_factor, (0.0, 0.0))
+}
+
+fn extract_line_bounds_at(page: &Page, scale_factor: f32, origin: (f32, f32)) -> Vec<LineBounds> {
     page.to_text_page(TextPageFlags::empty())
         .map(|text_page| {
             let mut bounds = Vec::new();
@@ -803,17 +823,17 @@ pub(crate) fn extract_line_bounds(page: &Page, scale_factor: f32) -> Vec<LineBou
                             .chars()
                             .filter_map(|ch| {
                                 ch.char().map(|c| CharInfo {
-                                    x: ch.origin().x * scale_factor,
+                                    x: ch.origin().x * scale_factor - origin.0,
                                     c,
                                 })
                             })
                             .collect();
 
                         bounds.push(LineBounds {
-                            x0: bbox.x0 * scale_factor,
-                            y0: bbox.y0 * scale_factor,
-                            x1: bbox.x1 * scale_factor,
-                            y1: bbox.y1 * scale_factor,
+                            x0: bbox.x0 * scale_factor - origin.0,
+                            y0: bbox.y0 * scale_factor - origin.1,
+                            x1: bbox.x1 * scale_factor - origin.0,
+                            y1: bbox.y1 * scale_factor - origin.1,
                             chars,
                             block_id,
                         });
@@ -950,6 +970,10 @@ fn estimate_char_width(line: &LineBounds) -> f32 {
 }
 
 pub(crate) fn extract_link_rects(page: &Page, scale_factor: f32) -> Vec<LinkRect> {
+    extract_link_rects_at(page, scale_factor, (0.0, 0.0))
+}
+
+fn extract_link_rects_at(page: &Page, scale_factor: f32, origin: (f32, f32)) -> Vec<LinkRect> {
     let Ok(links) = page.links() else {
         return Vec::new();
     };
@@ -973,10 +997,10 @@ pub(crate) fn extract_link_rects(page: &Page, scale_factor: f32) -> Vec<LinkRect
                 return None;
             }
 
-            let x0 = (rect.x0.min(rect.x1) * scale_factor).max(0.0);
-            let y0 = (rect.y0.min(rect.y1) * scale_factor).max(0.0);
-            let x1 = (rect.x0.max(rect.x1) * scale_factor).max(0.0);
-            let y1 = (rect.y0.max(rect.y1) * scale_factor).max(0.0);
+            let x0 = (rect.x0.min(rect.x1) * scale_factor - origin.0).max(0.0);
+            let y0 = (rect.y0.min(rect.y1) * scale_factor - origin.1).max(0.0);
+            let x1 = (rect.x0.max(rect.x1) * scale_factor - origin.0).max(0.0);
+            let y1 = (rect.y0.max(rect.y1) * scale_factor - origin.1).max(0.0);
 
             Some(LinkRect {
                 x0: x0 as u32,
@@ -989,13 +1013,6 @@ pub(crate) fn extract_link_rects(page: &Page, scale_factor: f32) -> Vec<LinkRect
         .collect()
 }
 
-struct TitleRect {
-    topleft_x: u32,
-    topleft_y: u32,
-    bottomright_x: u32,
-    bottomright_y: u32,
-}
-
 struct LineInfo {
     bbox: mupdf::Rect,
     max_size: f32,
@@ -1004,9 +1021,9 @@ struct LineInfo {
 
 fn collect_title_rects(
     page: &Page,
-    scale_factor: f32,
+    transform: &Matrix,
     page_width: f32,
-) -> Result<Vec<TitleRect>, mupdf::error::Error> {
+) -> Result<Vec<IRect>, mupdf::error::Error> {
     let text_page = page.to_text_page(TextPageFlags::COLLECT_STYLES)?;
     let mut sizes = Vec::new();
     let mut heights = Vec::new();
@@ -1065,7 +1082,7 @@ fn collect_title_rects(
         min_size_looser,
         median_height,
         page_width.max(1.0),
-        scale_factor,
+        transform,
     ))
 }
 
@@ -1075,8 +1092,8 @@ fn title_rects_for_threshold(
     threshold_loose: f32,
     median_height: f32,
     page_width: f32,
-    scale_factor: f32,
-) -> Vec<TitleRect> {
+    transform: &Matrix,
+) -> Vec<IRect> {
     lines
         .iter()
         .filter(|line| {
@@ -1088,17 +1105,13 @@ fn title_rects_for_threshold(
                 || (line.max_size >= threshold_loose && height_ok && width_ok)
         })
         .map(|line| {
-            let x0 = line.bbox.x0.min(line.bbox.x1);
-            let x1 = line.bbox.x0.max(line.bbox.x1);
-            let y0 = line.bbox.y0.min(line.bbox.y1);
-            let y1 = line.bbox.y0.max(line.bbox.y1);
-
-            TitleRect {
-                topleft_x: (x0 * scale_factor).max(0.0) as u32,
-                bottomright_x: (x1 * scale_factor).max(0.0) as u32,
-                topleft_y: (y0 * scale_factor).max(0.0) as u32,
-                bottomright_y: (y1 * scale_factor).max(0.0) as u32,
-            }
+            let r = line.bbox.transform(transform);
+            IRect::new(
+                r.x0.floor() as i32,
+                r.y0.floor() as i32,
+                r.x1.floor() as i32,
+                r.y1.floor() as i32,
+            )
         })
         .collect()
 }
@@ -1112,28 +1125,26 @@ fn percentile(values: &[f32], pct: f32) -> Option<f32> {
     values.get(idx).copied()
 }
 
-fn apply_title_color(pixmap: &mut Pixmap, rects: &[TitleRect], inverted: bool) {
+fn apply_title_color(pixmap: &mut Pixmap, rects: &[IRect], inverted: bool) {
     let n = pixmap.n() as usize;
     if n < 3 {
         return;
     }
 
-    let width = pixmap.width() as usize;
+    let bbox = pixmap.rect();
     let height = pixmap.height() as usize;
     let stride = pixmap.stride() as usize;
     let samples = pixmap.samples_mut();
 
     let mut clamped = Vec::new();
     let mut total_pixels: u64 = 0;
-    for rect in rects {
-        let x0 = rect.topleft_x.min(width as u32) as usize;
-        let x1 = rect.bottomright_x.min(width as u32) as usize;
-        let y0 = rect.topleft_y.min(height as u32) as usize;
-        let y1 = rect.bottomright_y.min(height as u32) as usize;
-
-        if x0 >= x1 || y0 >= y1 {
-            continue;
-        }
+    for rect in rects.iter().filter_map(|rect| local_rect(rect, &bbox)) {
+        let (x0, y0, x1, y1) = (
+            rect.x0 as usize,
+            rect.y0 as usize,
+            rect.x1 as usize,
+            rect.y1 as usize,
+        );
         let rect_pixels = u64::from((x1 - x0) as u32) * u64::from((y1 - y0) as u32);
         total_pixels = total_pixels.saturating_add(rect_pixels);
         clamped.push((x0, x1, y0, y1));
@@ -1245,10 +1256,11 @@ fn extract_text(
 
         let spec = RasterSpec::compute(page_bounds, viewport_px, 1.0, cell_dims);
 
-        let pdf_start_x = bounds.start_x / spec.mag;
-        let pdf_end_x = bounds.end_x / spec.mag;
-        let pdf_min_y = bounds.min_y / spec.mag;
-        let pdf_max_y = bounds.max_y / spec.mag;
+        let bbox = pb.transform(&spec.transform).round();
+        let pdf_start_x = (bounds.start_x + bbox.x0 as f32) / spec.mag;
+        let pdf_end_x = (bounds.end_x + bbox.x0 as f32) / spec.mag;
+        let pdf_min_y = (bounds.min_y + bbox.y0 as f32) / spec.mag;
+        let pdf_max_y = (bounds.max_y + bbox.y0 as f32) / spec.mag;
 
         if let Ok(text_page) = page.to_text_page(TextPageFlags::empty()) {
             let mut selected_lines: Vec<(f32, String, bool, bool)> = Vec::new();
@@ -1324,50 +1336,6 @@ fn extract_text(
 // DjVu rendering
 // ============================================================
 
-fn handle_djvu_page_request(
-    doc: &rdjvu::Document,
-    id: RequestId,
-    page_num: usize,
-    params: &RenderParams,
-    cache: &Arc<Mutex<PageCache>>,
-    responses: &Sender<RenderResponse>,
-    render_generation: u64,
-) {
-    let key = CacheKey::from_params(page_num, params);
-
-    let cached = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&key);
-    if let Some(cached) = cached {
-        let _ = responses.send(RenderResponse::Page {
-            id,
-            page: page_num,
-            data: Arc::clone(&cached),
-            render_generation,
-        });
-        return;
-    }
-
-    match render_djvu_page(doc, page_num, params) {
-        Ok(data) => {
-            let cached = cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(key, data);
-            let _ = responses.send(RenderResponse::Page {
-                id,
-                page: page_num,
-                data: Arc::clone(&cached),
-                render_generation,
-            });
-        }
-        Err(e) => {
-            let _ = responses.send(RenderResponse::Error { id, error: e });
-        }
-    }
-}
-
 fn render_djvu_page(
     doc: &rdjvu::Document,
     page_num: usize,
@@ -1423,7 +1391,7 @@ fn render_djvu_page(
 
     Ok(PageData {
         img_data: ImageData {
-            pixels,
+            source: PageSource::Raster(pixels),
             width_px,
             height_px,
             width_cell: (spec.output_width / f32::from(params.cell_size.width)) as u16,
@@ -1765,7 +1733,160 @@ impl DjvuRasterSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::unpremultiply_rgba;
+    use super::{
+        Colorspace, CompiledPage, Document, Matrix, PagePaint, PageSource, RenderParams,
+        render_page, render_pdf_page, unpremultiply_rgba,
+    };
+    use crate::pdf::CellSize;
+    use image::DynamicImage;
+
+    const STENCIL: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/testdata/vhs_stencil.pdf"
+    );
+
+    fn params(black: i32, white: i32, invert_images: bool, transparent: bool) -> RenderParams {
+        RenderParams {
+            area: ratatui::layout::Rect::new(0, 0, 102, 66),
+            cell_size: CellSize::new(6, 12),
+            scale: 1.0,
+            black,
+            white,
+            invert_images,
+            transparent,
+        }
+    }
+
+    fn assert_crop(
+        image: &DynamicImage,
+        raster: &[u8],
+        stride: usize,
+        channels: usize,
+        x: usize,
+        y: usize,
+    ) {
+        let row_bytes = image.width() as usize * channels;
+        assert_eq!(image.color().channel_count() as usize, channels);
+        for (row, bytes) in image.as_bytes().chunks_exact(row_bytes).enumerate() {
+            let offset = (y + row) * stride + x * channels;
+            if let Some(byte) = bytes
+                .iter()
+                .zip(&raster[offset..offset + row_bytes])
+                .position(|(a, b)| a != b)
+            {
+                panic!(
+                    "pixel ({}, {}) channel {}: got {}, expected {}",
+                    x + byte / channels,
+                    y + row,
+                    byte % channels,
+                    bytes[byte],
+                    raster[offset + byte]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compiled_crops_match_raster_for_text_and_images() {
+        let doc = Document::open(STENCIL).unwrap();
+        let page = doc.load_page(0).unwrap();
+        let transform = Matrix::default();
+        for params in [
+            params(-1, -1, false, false),
+            params(0x202830, 0xf0e8dc, true, false),
+            params(0x202830, 0xf0e8dc, false, false),
+            params(0x202830, 0xf0e8dc, false, true),
+        ] {
+            let full = render_page(&doc, 0, &params).unwrap().img_data;
+            let compiled = render_pdf_page(&doc, 0, &params, true).unwrap().img_data;
+            assert_eq!((compiled.width_px, compiled.height_px), (612, 792));
+            assert_eq!((full.width_px, full.height_px), (612, 792));
+            let PageSource::Compiled(program) = compiled.source else {
+                panic!("not compiled")
+            };
+            let PageSource::Raster(bytes) = full.source else {
+                panic!("not raster")
+            };
+            // Compare a full replay, the heading/stencil, and the footer to the
+            // old full-page raster, including tint and preserved images.
+            for (x, y, w, h) in [
+                (0, 0, 612, 792),
+                (111, 47, 415, 251),
+                (286, 738, u32::MAX, u32::MAX),
+            ] {
+                let crop = program.render_region(x, y, w, h).unwrap();
+                assert_eq!(
+                    (crop.width(), crop.height()),
+                    (w.min(612 - x), h.min(792 - y))
+                );
+                let channels = usize::from(full.channels);
+                assert_crop(
+                    &crop,
+                    &bytes,
+                    612 * channels,
+                    channels,
+                    x as usize,
+                    y as usize,
+                );
+            }
+            // Inside a magnified image, MuPDF starts its fixed-point texture
+            // sampler at the clip origin. Cropping a previously rasterized
+            // bitmap is not the reference for a native clipped draw here.
+            let region = mupdf::IRect::new(360, 168, 452, 199);
+            let mut pix =
+                mupdf::Pixmap::new_with_rect(&Colorspace::device_rgb(), region, params.transparent)
+                    .unwrap();
+            if params.transparent {
+                pix.clear().unwrap();
+            } else {
+                pix.clear_with(255).unwrap();
+            }
+            {
+                let dev = mupdf::Device::from_pixmap(&pix).unwrap();
+                page.run_contents(&dev, &transform).unwrap();
+            }
+            let paint = PagePaint::collect(&page, &transform, 612.0, &params);
+            let (expected, channels) = paint.pixels(&mut pix).unwrap();
+            let crop = program.render_region(360, 168, 92, 31).unwrap();
+            assert_eq!((crop.width(), crop.height()), (92, 31));
+            assert_crop(
+                &crop,
+                &expected,
+                92 * usize::from(channels),
+                usize::from(channels),
+                0,
+                0,
+            );
+            assert!(program.render_region(612, 0, 1, 1).is_err());
+        }
+    }
+
+    #[test]
+    fn compiled_crop_uses_transformed_page_origin() {
+        let doc = Document::open(STENCIL).unwrap();
+        let page = doc.load_page(0).unwrap();
+        let bounds = page.bounds().unwrap();
+        let transform = Matrix::new(1.0, 0.0, 0.0, 1.0, -75.25, 38.5);
+        let bbox = bounds.transform(&transform).round();
+        let params = params(0x202830, 0xf0e8dc, false, false);
+        let paint = PagePaint::collect(&page, &transform, bounds.width(), &params);
+        let mut pixmap = page
+            .to_pixmap(&transform, &Colorspace::device_rgb(), false, false)
+            .unwrap();
+        assert_eq!(pixmap.rect(), bbox);
+        let (bytes, channels) = paint.pixels(&mut pixmap).unwrap();
+        let program =
+            CompiledPage::new(page.to_display_list(false).unwrap(), transform, bbox, paint);
+        let crop = program.render_region(83, 52, 324, 198).unwrap();
+        assert_crop(
+            &crop,
+            &bytes,
+            pixmap.stride() as usize,
+            usize::from(channels),
+            83,
+            52,
+        );
+    }
 
     #[test]
     fn unpremultiply_restores_straight_alpha() {

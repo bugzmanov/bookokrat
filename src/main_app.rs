@@ -81,10 +81,7 @@ impl LibraryContext {
 
 // PDF support (feature-gated)
 #[cfg(feature = "pdf")]
-use crate::pdf::{
-    CellSize, DEFAULT_CACHE_SIZE, DEFAULT_CACHE_SIZE_KITTY, DEFAULT_PREFETCH_RADIUS,
-    DEFAULT_WORKERS, PageSelectionBounds, RenderService, TocTarget,
-};
+use crate::pdf::{CellSize, PageSelectionBounds, RenderService, TocTarget};
 #[cfg(feature = "pdf")]
 use crate::widget::pdf_reader::{InputAction, InputOutcome, PdfDisplayPlan, PdfReaderState};
 
@@ -1514,22 +1511,12 @@ impl App {
         );
         let use_kitty = is_kitty;
 
-        // Create render service (use a smaller cache for Kitty to cap memory)
-        let cache_size = if is_kitty {
-            DEFAULT_CACHE_SIZE_KITTY
-        } else {
-            DEFAULT_CACHE_SIZE
-        };
+        let uses_iterm2_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Iterm2);
         let doc_path = std::path::PathBuf::from(path);
-        let mut service = RenderService::with_config(
-            doc_path.clone(),
-            cell_size,
-            black,
-            white,
-            DEFAULT_WORKERS,
-            cache_size,
-            DEFAULT_PREFETCH_RADIUS,
-        );
+        let compile_pdf =
+            uses_iterm2_protocol && picker.is_some() && !crate::pdf::is_djvu_path(&doc_path);
+        let mut service =
+            RenderService::new(doc_path.clone(), cell_size, (black, white), compile_pdf);
 
         // Get document info
         let doc_info = service.document_info().cloned();
@@ -1639,7 +1626,6 @@ impl App {
             runtime_settings.pdf_page_layout_mode,
             runtime_settings.pdf_render_mode
         );
-        let uses_iterm2_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Iterm2);
         let uses_sixel_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Sixel);
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
@@ -1658,6 +1644,9 @@ impl App {
             self.settings.clone(),
         );
         pdf_reader.uses_iterm2_protocol = uses_iterm2_protocol;
+        if compile_pdf {
+            pdf_reader.compiled_spread = Some(0..0);
+        }
         pdf_reader.uses_sixel_protocol = uses_sixel_protocol;
         pdf_reader.sixel_margin_scroll = caps.pdf.sixel_margin_scroll;
         if use_kitty
@@ -1895,6 +1884,7 @@ impl App {
         crate::widget::pdf_reader::update_non_kitty_viewport(
             pdf_reader,
             self.pdf_conversion_tx.as_ref(),
+            self.pdf_service.as_ref(),
         );
     }
 

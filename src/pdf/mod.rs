@@ -4,6 +4,7 @@
 //! with worker pools for background rendering and caching.
 
 mod cache;
+mod compiled;
 mod converter;
 pub mod kittyv2;
 mod normal_mode;
@@ -18,6 +19,7 @@ mod worker;
 mod zoom;
 
 pub use cache::{CacheKey, PageCache};
+pub use compiled::CompiledPage;
 pub use converter::{
     CellSize, ConversionCommand, ConvertedImage, ImageState, RenderedFrame, TiledProtocol,
     run_conversion_loop,
@@ -42,7 +44,8 @@ pub use service::{DocumentInfo, RenderService};
 pub use state::{Command, Effect, RenderState};
 pub(crate) use types::link_visual_boxes;
 pub use types::{
-    CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData, VecExt, ViewportUpdate,
+    CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData, PageSource, VecExt,
+    ViewportUpdate,
 };
 pub(crate) use worker::{extract_djvu_line_bounds, is_djvu_path};
 pub use zoom::{ScrollDirection, Zoom};
@@ -50,10 +53,8 @@ pub use zoom::{ScrollDirection, Zoom};
 /// Default number of render workers
 pub const DEFAULT_WORKERS: usize = 2;
 
-/// Default page cache size (each page can be 5-15MB of pixel data)
+/// Maximum cached pages per service (raster or compiled, depending on protocol).
 pub const DEFAULT_CACHE_SIZE: usize = 15;
-/// Cache size for Kitty (same as default now that memory leak is fixed)
-pub const DEFAULT_CACHE_SIZE_KITTY: usize = 15;
 
 /// Default prefetch radius (pages before/after current)
 pub const DEFAULT_PREFETCH_RADIUS: usize = 10;

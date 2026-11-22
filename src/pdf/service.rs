@@ -61,15 +61,26 @@ pub struct DocumentInfo {
 impl RenderService {
     /// Create a new render service with default configuration
     #[must_use]
-    pub fn new(doc_path: PathBuf, cell_size: CellSize, black: i32, white: i32) -> Self {
+    pub fn new(
+        doc_path: PathBuf,
+        cell_size: CellSize,
+        colors: (i32, i32),
+        compile_pdf: bool,
+    ) -> Self {
         Self::with_config(
             doc_path,
             cell_size,
-            black,
-            white,
+            colors,
+            compile_pdf,
             DEFAULT_WORKERS,
             DEFAULT_CACHE_SIZE,
-            DEFAULT_PREFETCH_RADIUS,
+            // Compile just the neighboring page in either direction. The UI requests
+            // both visible pages explicitly in spread mode.
+            if compile_pdf {
+                1
+            } else {
+                DEFAULT_PREFETCH_RADIUS
+            },
         )
     }
 
@@ -78,8 +89,8 @@ impl RenderService {
     pub fn with_config(
         doc_path: PathBuf,
         cell_size: CellSize,
-        black: i32,
-        white: i32,
+        (black, white): (i32, i32),
+        compile_pdf: bool,
         num_workers: usize,
         cache_size: usize,
         prefetch_radius: usize,
@@ -105,7 +116,7 @@ impl RenderService {
             let generation = reload_generation.clone();
 
             std::thread::spawn(move || {
-                render_worker(&path, rx, tx, cache_clone, generation);
+                render_worker(&path, rx, tx, cache_clone, generation, compile_pdf);
             });
         }
 
@@ -676,7 +687,7 @@ mod tests {
     fn test_page_data(page: usize) -> Arc<PageData> {
         Arc::new(PageData {
             img_data: crate::pdf::types::ImageData {
-                pixels: vec![0, 0, 0],
+                source: crate::pdf::PageSource::Raster(vec![0, 0, 0]),
                 width_px: 1,
                 height_px: 1,
                 width_cell: 1,
@@ -737,8 +748,15 @@ mod tests {
         let target = tmp.path().join("test.pdf");
         std::fs::copy(&pdf_a, &target).unwrap();
 
-        let mut service =
-            RenderService::with_config(target.clone(), test_cell_size(), 0, 0x00FF_FFFF, 2, 5, 0);
+        let mut service = RenderService::with_config(
+            target.clone(),
+            test_cell_size(),
+            (0, 0x00FF_FFFF),
+            false,
+            2,
+            5,
+            0,
+        );
 
         let page_count_a = service.document_info().unwrap().page_count;
         assert_eq!(page_count_a, 20);
