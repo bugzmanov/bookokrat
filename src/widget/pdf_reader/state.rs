@@ -395,6 +395,8 @@ pub struct PdfReaderState {
     /// (WezTerm, Warp, Konsole, actual iTerm). Unlike `is_iterm`, which is
     /// only true for the real iTerm app.
     pub uses_iterm2_protocol: bool,
+    /// Only this spread may retain encoded strips when rendering compiled PDF pages.
+    pub(crate) compiled_spread: Option<std::ops::Range<usize>>,
     /// True when pages are displayed via the Sixel graphics protocol.
     pub uses_sixel_protocol: bool,
     /// True when the terminal can scroll a rectangle (DECLRMM/DECSLRM), letting Sixel
@@ -531,6 +533,7 @@ impl PdfReaderState {
             modal_overlay_rect: None,
             pending_screen_refresh: false,
             uses_iterm2_protocol: false,
+            compiled_spread: None,
             uses_sixel_protocol: false,
             sixel_margin_scroll: false,
             sixel_frame_strips: Vec::new(),

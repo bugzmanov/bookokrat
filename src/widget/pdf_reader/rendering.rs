@@ -156,11 +156,10 @@ pub(crate) fn convert_page_image(
     use crate::vendored::ratatui_image::Resize;
     use image::{DynamicImage, RgbImage};
 
-    let rgb_img = RgbImage::from_raw(
-        img_data.width_px,
-        img_data.height_px,
-        img_data.pixels.clone(),
-    )?;
+    let crate::pdf::PageSource::Raster(pixels) = &img_data.source else {
+        return None; // Compiled pages are replayed by the viewport converter.
+    };
+    let rgb_img = RgbImage::from_raw(img_data.width_px, img_data.height_px, pixels.clone())?;
     let dyn_img = DynamicImage::ImageRgb8(rgb_img);
 
     let area = Rect {
@@ -229,6 +228,19 @@ pub(crate) fn apply_render_responses(
     current_render_generation: u64,
 ) -> RenderUpdateResult {
     let use_kitty = pdf_reader.is_kitty;
+    if let Some(previous) = &mut pdf_reader.compiled_spread {
+        let dual = pdf_reader.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
+        let visible = pdf_reader.page..pdf_reader.page.saturating_add(if dual { 2 } else { 1 });
+        if *previous != visible {
+            for departed in std::mem::replace(previous, visible.clone()) {
+                if !visible.contains(&departed)
+                    && let Some(info) = pdf_reader.rendered.get_mut(departed)
+                {
+                    info.clear_image();
+                }
+            }
+        }
+    }
     // Data for an off-screen page (prefetch, pre-encoded neighbours) does not change what the
     // non-Kitty view draws, and every redraw there re-emits the visible image strips.
     let mut updated = responses.iter().any(|response| {
@@ -273,6 +285,9 @@ pub(crate) fn apply_render_responses(
                 // re-creates it from the new PageData.
                 let new_cell_size =
                     CellSize::new(data.img_data.width_cell, data.img_data.height_cell);
+                let geometry_changed = info.full_cell_size != Some(new_cell_size)
+                    || info.render_area_width_cells != Some(data.render_area_width_cells)
+                    || info.requested_scale != Some(data.requested_scale);
                 if let Some(ref existing_img) = info.img {
                     let full_page_image = !matches!(
                         existing_img,
@@ -349,7 +364,10 @@ pub(crate) fn apply_render_responses(
                     }
                 }
 
-                if !use_kitty {
+                if !use_kitty
+                    && (pdf_reader.compiled_spread.is_none()
+                        || (geometry_changed && page_on_screen(pdf_reader, page)))
+                {
                     // Intrinsic geometry may have changed (new page metrics),
                     // so force next viewport command to be re-emitted.
                     pdf_reader.last_sent_viewport = None;
@@ -377,6 +395,13 @@ pub(crate) fn apply_render_responses(
             match result {
                 Ok(frame) => {
                     let frame_index = frame.index;
+                    if pdf_reader
+                        .compiled_spread
+                        .as_ref()
+                        .is_some_and(|s| !s.contains(&frame_index))
+                    {
+                        continue; // The user left this spread while the converter was rendering.
+                    }
                     let is_full_frame = !matches!(&frame.image, ConvertedImage::TileUpdate { .. });
                     if use_kitty
                         && is_full_frame
@@ -449,7 +474,7 @@ pub(crate) fn apply_render_responses(
                     if use_kitty || on_screen {
                         pdf_reader.last_render.rect = Rect::default();
                         updated = true;
-                        if !use_kitty {
+                        if !use_kitty && pdf_reader.compiled_spread.is_none() {
                             // Fresh converted frame can change dual strip intersections.
                             pdf_reader.last_sent_viewport = None;
                         }
@@ -1030,7 +1055,7 @@ impl PdfReaderState {
             }
         }
 
-        if needs_initial_image {
+        if needs_initial_image && self.compiled_spread.is_none() {
             if let Some(service) = service.as_deref_mut() {
                 service.request_page(self.page);
             }
@@ -1777,6 +1802,7 @@ fn render_iterm2_modal_backing(
 pub(crate) fn update_non_kitty_viewport(
     pdf_reader: &mut PdfReaderState,
     conversion_tx: Option<&flume::Sender<ConversionCommand>>,
+    service: Option<&crate::pdf::RenderService>,
 ) {
     if pdf_reader.is_kitty {
         return;
@@ -1813,62 +1839,64 @@ pub(crate) fn update_non_kitty_viewport(
     // in dual layout at a hard pan clamp one page has an empty slice and its
     // image legitimately never exists — probing it would fire DisplayFailed on
     // every frame, churning the converter forever.
-    let covered_pages: Vec<usize> =
-        if pdf_reader.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
-            pdf_reader
-                .dual_viewports_for_non_kitty(viewport)
-                .iter()
-                .map(|v| v.page)
-                .collect()
-        } else {
-            vec![viewport.page]
-        };
-    let missing: Vec<usize> = covered_pages
-        .into_iter()
-        .filter(|&p| {
-            pdf_reader
-                .rendered
-                .get(p)
-                .is_none_or(|info| info.img.is_none())
-        })
-        .collect();
+    let Some(cmd) = pdf_reader.viewport_command(viewport) else {
+        // A dual-page viewport needs geometry for both pages first.
+        return;
+    };
+    let viewports = match &cmd {
+        ConversionCommand::UpdateViewport(v) => std::slice::from_ref(v),
+        ConversionCommand::UpdateDualViewport(vs) => vs.as_slice(),
+        _ => unreachable!("viewport_command returns a viewport update"),
+    };
+    let mut missing = Vec::new();
+    for v in viewports {
+        if pdf_reader
+            .rendered
+            .get(v.page)
+            .is_none_or(|info| info.img.is_none())
+        {
+            if pdf_reader.compiled_spread.is_some() {
+                let Some(page) = service.and_then(|s| s.get_cached_page(v.page)) else {
+                    continue; // The worker will enqueue the newly compiled page.
+                };
+                let _ = tx.send(ConversionCommand::EnqueuePage(page));
+            }
+            missing.push(v.page);
+        }
+    }
     if !missing.is_empty() {
         let _ = tx.send(ConversionCommand::DisplayFailed(missing));
     }
-    if let Some(cmd) = pdf_reader.viewport_command(viewport) {
-        if PdfReaderState::debug_non_kitty_dual_enabled() {
-            match &cmd {
-                ConversionCommand::UpdateViewport(v) => {
-                    log::debug!(
-                        "send-viewport single page={} y={} x={} h={} w={}",
-                        v.page,
-                        v.y_offset_cells,
-                        v.x_offset_cells,
-                        v.viewport_height_cells,
-                        v.viewport_width_cells
-                    );
-                }
-                ConversionCommand::UpdateDualViewport(vs) => {
-                    log::debug!(
-                        "send-viewport dual base(page={} y={} x={} h={} w={}) -> {:?}",
-                        viewport.page,
-                        viewport.y_offset_cells,
-                        viewport.x_offset_cells,
-                        viewport.viewport_height_cells,
-                        viewport.viewport_width_cells,
-                        vs.iter()
-                            .map(|v| (v.page, v.x_offset_cells, v.viewport_width_cells))
-                            .collect::<Vec<_>>()
-                    );
-                }
-                _ => {}
+    if PdfReaderState::debug_non_kitty_dual_enabled() {
+        match &cmd {
+            ConversionCommand::UpdateViewport(v) => {
+                log::debug!(
+                    "send-viewport single page={} y={} x={} h={} w={}",
+                    v.page,
+                    v.y_offset_cells,
+                    v.x_offset_cells,
+                    v.viewport_height_cells,
+                    v.viewport_width_cells
+                );
             }
+            ConversionCommand::UpdateDualViewport(vs) => {
+                log::debug!(
+                    "send-viewport dual base(page={} y={} x={} h={} w={}) -> {:?}",
+                    viewport.page,
+                    viewport.y_offset_cells,
+                    viewport.x_offset_cells,
+                    viewport.viewport_height_cells,
+                    viewport.viewport_width_cells,
+                    vs.iter()
+                        .map(|v| (v.page, v.x_offset_cells, v.viewport_width_cells))
+                        .collect::<Vec<_>>()
+                );
+            }
+            _ => {}
         }
-        let _ = tx.send(cmd);
-        pdf_reader.last_sent_viewport = Some(viewport);
     }
-    // If viewport_command() returned None (pair not ready in dual mode),
-    // do NOT update last_sent_viewport so we retry on next frame.
+    let _ = tx.send(cmd);
+    pdf_reader.last_sent_viewport = Some(viewport);
 }
 
 /// Internal structure for visible page calculation

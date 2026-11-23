@@ -1,5 +1,9 @@
 //! Core types for PDF rendering
 
+use std::sync::Arc;
+
+use super::CompiledPage;
+
 /// Character position information for text extraction
 #[derive(Clone, Debug)]
 pub struct CharInfo {
@@ -92,15 +96,18 @@ pub(crate) fn link_visual_boxes(
     out
 }
 
-/// Raw rendered page image before protocol encoding.
-///
-/// Contains RGB pixel data and dimensions in both pixels and terminal cells.
-/// This is the intermediate format between MuPDF rendering and terminal
-/// protocol encoding (Kitty/Sixel/iTerm2).
+/// Source for a page's pixels. A compiled source is replayed only for the
+/// requested region; it does not own a full-resolution page bitmap.
+#[derive(Clone)]
+pub enum PageSource {
+    Raster(Vec<u8>),
+    Compiled(Arc<CompiledPage>),
+}
+
+/// Full logical page dimensions and its source before terminal protocol encoding.
 #[derive(Clone)]
 pub struct ImageData {
-    /// Raw pixel data. Bytes per pixel is given by `channels` (3 = RGB, 4 = RGBA).
-    pub pixels: Vec<u8>,
+    pub source: PageSource,
     /// Image width in pixels
     pub width_px: u32,
     /// Image height in pixels

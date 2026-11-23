@@ -25,6 +25,7 @@ use crate::vendored::ratatui_image::{
     protocol::{Protocol, iterm2::Iterm2},
 };
 
+use super::PageSource;
 use super::kittyv2::ImageId;
 use super::normal_mode::{CursorRect, VisualRect};
 use super::selection::{HighlightOverlay, SelectionRect};
@@ -400,8 +401,18 @@ struct HighlightPixelRect {
 
 struct CachedPage {
     data: Arc<PageData>,
-    decoded: Option<DynamicImage>,
     tile_cache: HashMap<u32, Arc<Protocol>>,
+}
+
+impl CachedPage {
+    fn has_source(&self) -> bool {
+        !matches!(&self.data.img_data.source, PageSource::Raster(bytes) if bytes.is_empty())
+    }
+
+    fn density(&self, picker: &Picker) -> PixelDensity {
+        let img = &self.data.img_data;
+        pixel_density_for_dims(img.width_px, img.height_px, cached_cell_size(self), picker)
+    }
 }
 
 pub enum ConversionCommand {
@@ -455,6 +466,26 @@ struct CommentCacheEntry {
 }
 
 impl ConverterEngine {
+    /// An iTerm2 page can only be encoded for a viewport currently on screen.
+    /// Drop both the remembered viewport and its encoded strips on a page flip.
+    fn retain_iterm_viewports(&mut self, visible: &[ViewportUpdate]) {
+        if self.picker.protocol_type() != ProtocolType::Iterm2 {
+            return;
+        }
+        self.last_viewport_by_page.retain(|page, _| {
+            if visible.iter().any(|vp| vp.page == *page) {
+                return true;
+            }
+            if let Some(Some(cached)) = self.page_cache.get_mut(*page) {
+                cached.tile_cache.clear();
+            }
+            self.sent_for_viewport.remove(page);
+            self.tiled_pages.remove(page);
+            false
+        });
+        self.viewport = None;
+    }
+
     fn handle_single_viewport_update(
         &mut self,
         new_viewport: ViewportUpdate,
@@ -518,28 +549,19 @@ impl ConverterEngine {
 
         let overlays = self.build_overlay_set(new_viewport.page);
         if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
-            let use_tiles = self.picker.protocol_type() == ProtocolType::Iterm2;
-            let result = if use_tiles {
-                render_viewport_tiles(cached, &new_viewport, &overlays, &self.picker)
-            } else {
-                render_page_with_viewport(
-                    cached,
-                    new_viewport.page,
-                    &overlays,
-                    &self.picker,
-                    self.viewport.as_ref(),
-                    self.pid,
-                    self.kitty_shm_support,
-                )
-            };
+            let result = render_page_with_viewport(
+                cached,
+                new_viewport.page,
+                &overlays,
+                &self.picker,
+                self.viewport.as_ref(),
+                self.pid,
+                self.kitty_shm_support,
+            );
 
             match result {
                 Ok(img) => {
-                    if use_tiles {
-                        self.tiled_pages.insert(new_viewport.page);
-                    } else {
-                        self.tiled_pages.remove(&new_viewport.page);
-                    }
+                    self.tiled_pages.remove(&new_viewport.page);
                     self.sent_for_viewport.insert(new_viewport.page);
 
                     sender.send(Ok(RenderedFrame {
@@ -704,28 +726,12 @@ impl ConverterEngine {
     }
 
     fn should_skip_render(&self, page_num: usize, new_iter: usize) -> Option<usize> {
-        match self.picker.protocol_type() {
-            ProtocolType::Kitty => {
-                if self.sent_for_viewport.contains(&page_num) {
-                    return Some(new_iter);
-                }
-
-                None
-            }
-            _ => {
-                if self.sent_for_viewport.contains(&page_num) {
-                    return Some(new_iter);
-                }
-
-                let viewport_matches = self.last_viewport_by_page.contains_key(&page_num)
-                    || self.viewport.as_ref().is_some_and(|vp| vp.page == page_num);
-                if !viewport_matches {
-                    Some(new_iter)
-                } else {
-                    None
-                }
-            }
-        }
+        let needs_viewport = self.picker.protocol_type() != ProtocolType::Kitty;
+        (self.sent_for_viewport.contains(&page_num)
+            || (needs_viewport
+                && !self.last_viewport_by_page.contains_key(&page_num)
+                && !self.viewport.is_some_and(|vp| vp.page == page_num)))
+        .then_some(new_iter)
     }
 
     fn update_cache_for_page(&mut self, page_num: usize, page_info: &Arc<PageData>) {
@@ -733,26 +739,19 @@ impl ConverterEngine {
             return;
         }
 
-        // Preserve existing tile cache if dimensions match, otherwise start fresh
-        let dimensions_match = self.page_cache[page_num].as_ref().is_some_and(|cached| {
-            cached.data.img_data.width_cell == page_info.img_data.width_cell
-                && cached.data.img_data.height_cell == page_info.img_data.height_cell
-                && (cached.data.scale_factor - page_info.scale_factor).abs() < 0.001
-        });
-        let existing_tile_cache = if dimensions_match {
-            self.page_cache[page_num]
-                .as_ref()
-                .map(|cached| cached.tile_cache.clone())
-                .unwrap_or_default()
-        } else {
-            self.sent_for_viewport.remove(&page_num);
-            HashMap::new()
-        };
-
+        // Equal dimensions do not identify a render generation: a tint, original
+        // image setting, or new document can change every pixel at the same size.
+        if self.page_cache[page_num]
+            .as_ref()
+            .is_some_and(|cached| Arc::ptr_eq(&cached.data, page_info))
+        {
+            return;
+        }
+        self.sent_for_viewport.remove(&page_num);
+        self.tiled_pages.remove(&page_num);
         self.page_cache[page_num] = Some(CachedPage {
             data: Arc::clone(page_info),
-            decoded: None,
-            tile_cache: existing_tile_cache,
+            tile_cache: HashMap::new(),
         });
         self.update_comment_cache_for_page(page_num, page_info.scale_factor);
     }
@@ -799,6 +798,7 @@ impl ConverterEngine {
                 self.page = self.page.min(n_pages.saturating_sub(1));
                 self.sent_for_viewport.clear();
                 self.last_viewport_by_page.clear();
+                self.viewport = None;
                 self.tiled_pages.clear();
             }
             ConversionCommand::NavigateTo(new_page) => {
@@ -806,8 +806,6 @@ impl ConverterEngine {
                 self.page = new_page;
                 // Update SHM protection to cover pages near current
                 super::kittyv2::set_viewport_position(new_page as i64);
-                // Clear decoded images for pages far from current to save memory
-                self.clear_distant_decoded(new_page, 20);
                 // Also drop distant pixel buffers to cap memory even if no render happens.
                 self.clear_distant_pixels(new_page, 5);
             }
@@ -826,6 +824,7 @@ impl ConverterEngine {
                     );
                 }
                 self.dual_viewports = false;
+                self.retain_iterm_viewports(std::slice::from_ref(&new_viewport));
                 self.handle_single_viewport_update(new_viewport, sender)?;
             }
             ConversionCommand::UpdateDualViewport(viewports) => {
@@ -850,6 +849,7 @@ impl ConverterEngine {
                     );
                 }
                 self.dual_viewports = true;
+                self.retain_iterm_viewports(&viewports);
                 for viewport in viewports {
                     self.handle_single_viewport_update(viewport, sender)?;
                 }
@@ -886,9 +886,27 @@ impl ConverterEngine {
                 self.reconvert_cursor_change(old_cursor.as_ref(), new_cursor.as_ref(), sender)?;
             }
             ConversionCommand::UpdateVisual(new_visual) => {
-                let old_visual = std::mem::replace(&mut self.visual_rects, new_visual.clone());
-                self.invalidate_tiles_for_changed_pages(&old_visual, &new_visual);
-                self.reconvert_changed_visual(&old_visual, &new_visual, sender)?;
+                let old_visual = std::mem::replace(&mut self.visual_rects, new_visual);
+                let affected = Self::collect_affected_pages(&old_visual, &self.visual_rects);
+                if self.picker.protocol_type() == ProtocolType::Iterm2 {
+                    for page in affected {
+                        let ranges = old_visual
+                            .iter()
+                            .chain(&self.visual_rects)
+                            .filter(|rect| rect.page == page)
+                            .map(|rect| rect.y..rect.y.saturating_add(rect.height));
+                        Self::invalidate_row_ranges(
+                            &mut self.page_cache,
+                            page,
+                            &self.picker,
+                            ranges,
+                        );
+                        self.send_dirty_tiles(page, sender)?;
+                    }
+                } else {
+                    self.invalidate_tiles_for_pages(&affected);
+                    self.reconvert_pages(&affected, sender)?;
+                }
             }
             ConversionCommand::SetShowLinkUnderlines(show) => {
                 if self.show_link_underlines != show {
@@ -935,7 +953,9 @@ impl ConverterEngine {
                 }
                 for page in pages {
                     self.sent_for_viewport.remove(&page);
-                    self.last_viewport_by_page.remove(&page);
+                    if self.picker.protocol_type() != ProtocolType::Iterm2 {
+                        self.last_viewport_by_page.remove(&page);
+                    }
                 }
             }
             ConversionCommand::DumpState => {
@@ -969,11 +989,6 @@ impl ConverterEngine {
         }
     }
 
-    fn invalidate_tiles_for_changed_pages<T: PageScoped>(&mut self, old: &[T], new: &[T]) {
-        let affected = Self::collect_affected_pages(old, new);
-        self.invalidate_tiles_for_pages(&affected);
-    }
-
     fn reconvert_pages(
         &mut self,
         affected: &HashSet<usize>,
@@ -983,15 +998,12 @@ impl ConverterEngine {
             // Remove from sent set so the page will be re-rendered with new overlays
             self.sent_for_viewport.remove(page_num);
 
-            // Check if page is cached and has pixel data
-            let has_pixels = self
+            if !self
                 .page_cache
                 .get(*page_num)
-                .and_then(|opt| opt.as_ref())
-                .map(|c| !c.data.img_data.pixels.is_empty())
-                .unwrap_or(false);
-
-            if !has_pixels {
+                .and_then(Option::as_ref)
+                .is_some_and(CachedPage::has_source)
+            {
                 continue;
             }
 
@@ -1054,136 +1066,53 @@ impl ConverterEngine {
         }
     }
 
-    fn reconvert_changed_visual(
-        &mut self,
-        old: &[VisualRect],
-        new: &[VisualRect],
-        sender: &Sender<Result<RenderedFrame, PipelineError>>,
-    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let can_use_tiles = self.picker.protocol_type() == ProtocolType::Iterm2;
-
-        if can_use_tiles && self.viewport.is_some() {
-            self.render_visual_tile_updates(old, new, sender)
-        } else {
-            self.render_visual_full_pages(old, new, sender)
-        }
-    }
-
-    fn render_visual_full_pages(
-        &mut self,
-        old: &[VisualRect],
-        new: &[VisualRect],
-        sender: &Sender<Result<RenderedFrame, PipelineError>>,
-    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let mut affected: HashSet<usize> = HashSet::new();
-        for rect in old {
-            affected.insert(rect.page);
-        }
-        for rect in new {
-            affected.insert(rect.page);
-        }
-
-        for page_num in affected {
-            self.sent_for_viewport.remove(&page_num);
-
-            let Some(Some(cached)) = self.page_cache.get(page_num) else {
-                continue;
-            };
-
-            if cached.data.img_data.pixels.is_empty() {
-                continue;
+    /// Convert page-pixel ranges to absolute strip indices, independent of
+    /// either page's pan/scroll in a two-page spread.
+    fn invalidate_row_ranges(
+        pages: &mut [Option<CachedPage>],
+        page: usize,
+        picker: &Picker,
+        ranges: impl Iterator<Item = Range<u32>>,
+    ) {
+        let Some(Some(cached)) = pages.get_mut(page) else {
+            return;
+        };
+        let row_height = cached.density(picker).y;
+        for range in ranges {
+            let end = range.end.min(cached.data.img_data.height_px);
+            if range.start < end {
+                for row in range.start / row_height..end.div_ceil(row_height) {
+                    cached.tile_cache.remove(&row);
+                }
             }
-
-            let overlays = self.build_overlay_set(page_num);
-            self.rerender_page(page_num, &overlays, sender)?;
         }
-        Ok(())
     }
 
-    fn render_visual_tile_updates(
+    fn send_dirty_tiles(
         &mut self,
-        old: &[VisualRect],
-        new: &[VisualRect],
+        page: usize,
         sender: &Sender<Result<RenderedFrame, PipelineError>>,
     ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let Some(viewport) = self.viewport.as_ref() else {
+        let Some(viewport) = self.last_viewport_by_page.get(&page).copied() else {
             return Ok(());
         };
-
-        // Collect affected pages from old and new visual rects
-        let mut affected_pages: HashSet<usize> = HashSet::new();
-        for rect in old.iter().chain(new.iter()) {
-            affected_pages.insert(rect.page);
+        let overlays = self.build_overlay_set(page);
+        if !self.tiled_pages.contains(&page) {
+            return self.rerender_page(page, &overlays, sender);
         }
-
-        for page_num in affected_pages {
-            let overlays = self.build_overlay_set(page_num);
-            let Some(Some(cached)) = self.page_cache.get_mut(page_num) else {
-                continue;
-            };
-
-            // Use page-intrinsic cell size to match render_viewport_tiles density
-            let cell_size = cached_cell_size(cached);
-            let decoded = match take_decoded(cached) {
-                Ok(img) => img,
-                Err(e) => {
-                    sender.send(Err(e))?;
-                    continue;
-                }
-            };
-
-            // Compute tile height using the same density as render_viewport_tiles
-            let density = pixel_density_for_image(&decoded, cell_size, &self.picker);
-            let tile_height_px = density.y.max(1);
-
-            // Now compute affected tile indices using the correct density
-            let mut tile_indices: Vec<u32> = Vec::new();
-            for rect in old.iter().chain(new.iter()) {
-                if rect.page != page_num {
-                    continue;
-                }
-                let start_tile = rect.y / tile_height_px;
-                let end_tile = (rect.y + rect.height).div_ceil(tile_height_px);
-                for tile_idx in start_tile..end_tile {
-                    if !tile_indices.contains(&tile_idx) {
-                        tile_indices.push(tile_idx);
-                    }
-                }
-            }
-
-            let tiles = match render_specific_tiles(
-                &decoded,
-                cell_size,
-                viewport,
-                &tile_indices,
-                &overlays,
-                &self.picker,
-            ) {
-                Ok(tiles) => tiles,
-                Err(e) => {
-                    sender.send(Err(e))?;
-                    continue;
-                }
-            };
-
-            cached.decoded = Some(decoded);
-
-            if !tiles.is_empty() {
-                log::trace!(
-                    "Visual tile update: page={} tiles={}",
-                    page_num,
-                    tiles.len()
-                );
-                sender.send(Ok(RenderedFrame {
-                    index: page_num,
-                    requested_scale: cached.data.requested_scale,
-                    achieved_scale: cached.data.achieved_scale,
-                    image: ConvertedImage::TileUpdate { tiles, cell_size },
-                }))?;
-            }
+        let Some(Some(cached)) = self.page_cache.get_mut(page) else {
+            return Ok(());
+        };
+        match render_tiles(cached, &viewport, &overlays, &self.picker, true) {
+            Ok((tiles, cell_size)) if !tiles.is_empty() => sender.send(Ok(RenderedFrame {
+                index: page,
+                requested_scale: cached.data.requested_scale,
+                achieved_scale: cached.data.achieved_scale,
+                image: ConvertedImage::TileUpdate { tiles, cell_size },
+            })),
+            Ok(_) => Ok(()),
+            Err(e) => sender.send(Err(e)),
         }
-
-        Ok(())
     }
 
     fn reconvert_cursor_change(
@@ -1192,44 +1121,35 @@ impl ConverterEngine {
         new_cursor: Option<&CursorRect>,
         sender: &Sender<Result<RenderedFrame, PipelineError>>,
     ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let affected_page = new_cursor
-            .map(|c| c.page)
-            .or_else(|| old_cursor.map(|c| c.page));
-        let can_use_tiles = self.picker.protocol_type() == ProtocolType::Iterm2;
-        let page_is_tiled = affected_page.is_some_and(|p| self.tiled_pages.contains(&p));
-
-        if can_use_tiles && !page_is_tiled {
-            // Full tile render already includes cursor overlay via build_overlay_set
-            // (self.cursor_rect was updated before this call), so no separate
-            // render_cursor_tile_updates is needed.
-            if let Some(vp) = self.viewport.as_ref()
-                && let Some(page_num) = affected_page
+        let iterm = self.picker.protocol_type() == ProtocolType::Iterm2;
+        let cursors = [
+            old_cursor.map(|c| expand_cursor_rect(c, &self.picker)),
+            new_cursor.map(|c| expand_cursor_rect(c, &self.picker)),
+        ];
+        for (i, cursor) in cursors.iter().enumerate() {
+            let Some(cursor) = cursor else { continue };
+            if i == 1
+                && cursors[0]
+                    .as_ref()
+                    .is_some_and(|old| old.page == cursor.page)
             {
-                let overlays = self.build_overlay_set(page_num);
-                if let Some(Some(cached)) = self.page_cache.get_mut(page_num) {
-                    match render_viewport_tiles(cached, vp, &overlays, &self.picker) {
-                        Ok(img) => {
-                            sender.send(Ok(RenderedFrame {
-                                index: page_num,
-                                requested_scale: cached.data.requested_scale,
-                                achieved_scale: cached.data.achieved_scale,
-                                image: img,
-                            }))?;
-                            self.tiled_pages.insert(page_num);
-                            self.sent_for_viewport.insert(page_num);
-                        }
-                        Err(e) => {
-                            sender.send(Err(e))?;
-                        }
-                    }
-                }
+                continue;
             }
-        } else if can_use_tiles && page_is_tiled {
-            self.render_cursor_tile_updates(old_cursor, new_cursor, sender)?;
-        } else {
-            self.render_cursor_full_pages(old_cursor, new_cursor, sender)?;
+            let ranges = cursors
+                .iter()
+                .flatten()
+                .filter(|c| c.page == cursor.page)
+                .map(|c| c.y..c.y.saturating_add(c.height));
+            Self::invalidate_row_ranges(&mut self.page_cache, cursor.page, &self.picker, ranges);
+            if iterm {
+                self.send_dirty_tiles(cursor.page, sender)?;
+            }
         }
-        Ok(())
+        if iterm {
+            Ok(())
+        } else {
+            self.render_cursor_full_pages(old_cursor, new_cursor, sender)
+        }
     }
 
     fn render_cursor_full_pages(
@@ -1262,7 +1182,7 @@ impl ConverterEngine {
             };
 
             // Skip if no pixel data (distant page was cleared)
-            if cached.data.img_data.pixels.is_empty() {
+            if !cached.has_source() {
                 // Mark as pending - pixels may arrive later
                 if new_cursor.is_some_and(|c| c.page == page_num) {
                     log::trace!(
@@ -1277,101 +1197,6 @@ impl ConverterEngine {
             self.pending_cursor_pages.remove(&page_num);
             let overlays = self.build_overlay_set_with_cursor(page_num, new_cursor);
             self.rerender_page(page_num, &overlays, sender)?;
-        }
-
-        Ok(())
-    }
-
-    fn render_cursor_tile_updates(
-        &mut self,
-        old_cursor: Option<&CursorRect>,
-        new_cursor: Option<&CursorRect>,
-        sender: &Sender<Result<RenderedFrame, PipelineError>>,
-    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let Some(viewport) = self.viewport.as_ref() else {
-            return Ok(());
-        };
-
-        let old_cursor = old_cursor.map(|cursor| expand_cursor_rect(cursor, &self.picker));
-        let new_cursor = new_cursor.map(|cursor| expand_cursor_rect(cursor, &self.picker));
-
-        // Collect affected pages from both cursors
-        let mut affected_pages: HashSet<usize> = HashSet::new();
-        if let Some(cursor) = old_cursor.as_ref() {
-            affected_pages.insert(cursor.page);
-        }
-        if let Some(cursor) = new_cursor.as_ref() {
-            affected_pages.insert(cursor.page);
-        }
-
-        for page_num in affected_pages {
-            let overlays = self.build_overlay_set_with_cursor(page_num, new_cursor.as_ref());
-            let Some(Some(cached)) = self.page_cache.get_mut(page_num) else {
-                continue;
-            };
-
-            // Use page-intrinsic cell size to match render_viewport_tiles density
-            let cell_size = cached_cell_size(cached);
-            let decoded = match take_decoded(cached) {
-                Ok(img) => img,
-                Err(e) => {
-                    sender.send(Err(e))?;
-                    continue;
-                }
-            };
-
-            // Compute tile height using the same density as render_viewport_tiles
-            let density = pixel_density_for_image(&decoded, cell_size, &self.picker);
-            let tile_height_px = density.y.max(1);
-
-            // Now compute affected tile indices using the correct density
-            let mut tile_indices: Vec<u32> = Vec::new();
-            for cursor in [old_cursor.as_ref(), new_cursor.as_ref()]
-                .into_iter()
-                .flatten()
-            {
-                if cursor.page != page_num {
-                    continue;
-                }
-                let start_tile = cursor.y / tile_height_px;
-                let end_tile = (cursor.y + cursor.height).div_ceil(tile_height_px);
-                for tile_idx in start_tile..end_tile {
-                    if !tile_indices.contains(&tile_idx) {
-                        tile_indices.push(tile_idx);
-                    }
-                }
-            }
-
-            let tiles = match render_specific_tiles(
-                &decoded,
-                cell_size,
-                viewport,
-                &tile_indices,
-                &overlays,
-                &self.picker,
-            ) {
-                Ok(tiles) => tiles,
-                Err(e) => {
-                    sender.send(Err(e))?;
-                    continue;
-                }
-            };
-
-            cached.decoded = Some(decoded);
-
-            if !tiles.is_empty() {
-                log::trace!(
-                    "Cursor tile update: page={} tiles={}",
-                    page_num,
-                    tiles.len()
-                );
-                sender.send(Ok(RenderedFrame {
-                    index: page_num,
-                    requested_scale: cached.data.requested_scale,
-                    achieved_scale: cached.data.achieved_scale,
-                    image: ConvertedImage::TileUpdate { tiles, cell_size },
-                }))?;
-            }
         }
 
         Ok(())
@@ -1393,10 +1218,13 @@ impl ConverterEngine {
             .or_else(|| self.viewport.filter(|vp| vp.page == page_num));
 
         // Use tile rendering for all non-Kitty protocols (matches reconvert_pages logic)
-        if self.picker.protocol_type() != ProtocolType::Kitty
-            && let Some(viewport) = page_viewport.as_ref()
-        {
-            return render_viewport_tiles(cached, viewport, overlays, &self.picker);
+        if self.picker.protocol_type() != ProtocolType::Kitty {
+            let viewport = page_viewport
+                .as_ref()
+                .ok_or_else(|| pipeline_error("Cannot encode strips without a viewport"))?;
+            let image = render_viewport_tiles(cached, viewport, overlays, &self.picker)?;
+            self.tiled_pages.insert(page_num);
+            return Ok(image);
         }
 
         render_page_with_viewport(
@@ -1528,21 +1356,6 @@ impl ConverterEngine {
             .insert(page_num, CommentCacheEntry { rects: rects_px });
     }
 
-    /// Clear decoded images for pages far from the current page to save memory.
-    /// Keeps decoded images only for pages within `radius` of `current_page`.
-    fn clear_distant_decoded(&mut self, current_page: usize, radius: usize) {
-        let start = current_page.saturating_sub(radius);
-        let end = current_page.saturating_add(radius);
-
-        for (i, cached) in self.page_cache.iter_mut().enumerate() {
-            if let Some(page) = cached
-                && (i < start || i > end)
-            {
-                page.decoded = None;
-            }
-        }
-    }
-
     /// Clear decoded/tiles for pages far from current to limit memory usage.
     /// Keeps nearby pages so overlays can still be re-rendered quickly.
     /// Also protects the cursor page and pages with pending cursor updates.
@@ -1579,8 +1392,8 @@ impl ConverterEngine {
                 if self.pending_cursor_pages.contains(&i) {
                     continue;
                 }
-                if page.decoded.is_some() || !page.tile_cache.is_empty() {
-                    log::trace!("Clearing decoded/tile cache for distant page {i}");
+                if !page.tile_cache.is_empty() {
+                    log::trace!("Clearing tile cache for distant page {i}");
                 }
                 // Drop cached page data entirely to free pixel buffers.
                 // Also remove from sent_for_viewport so it can be re-rendered if needed.
@@ -1594,24 +1407,21 @@ impl ConverterEngine {
     fn log_memory_stats(&self) {
         let mut cached_pages = 0usize;
         let mut pixel_bytes = 0usize;
-        let mut decoded_count = 0usize;
         let mut tile_cache_count = 0usize;
 
         for cached in self.page_cache.iter().flatten() {
             cached_pages += 1;
-            pixel_bytes += cached.data.img_data.pixels.len();
-            if cached.decoded.is_some() {
-                decoded_count += 1;
+            if let PageSource::Raster(bytes) = &cached.data.img_data.source {
+                pixel_bytes += bytes.len();
             }
             tile_cache_count += cached.tile_cache.len();
         }
 
         let pixel_mb = pixel_bytes as f64 / (1024.0 * 1024.0);
         log::info!(
-            "Converter memory: {} cached pages ({:.1} MB pixels), {} decoded, {} tiles, {} sent",
+            "Converter memory: {} cached pages ({:.1} MB raster pixels), {} tiles, {} sent",
             cached_pages,
             pixel_mb,
-            decoded_count,
             tile_cache_count,
             self.sent_for_viewport.len()
         );
@@ -1645,12 +1455,9 @@ impl ConverterEngine {
         log::info!("  page_cache status (pages {start}..{end}):");
         for i in start..end {
             if let Some(Some(cached)) = self.page_cache.get(i) {
-                let has_pixels = !cached.data.img_data.pixels.is_empty();
-                let has_decoded = cached.decoded.is_some();
+                let has_source = cached.has_source();
                 let in_sent = self.sent_for_viewport.contains(&i);
-                log::info!(
-                    "    page {i}: pixels={has_pixels}, decoded={has_decoded}, sent={in_sent}"
-                );
+                log::info!("    page {i}: source={has_source}, sent={in_sent}");
             } else {
                 log::info!("    page {i}: (no cache)");
             }
@@ -1702,26 +1509,62 @@ fn decode_pixels(
     height: u32,
     channels: u8,
 ) -> Result<DynamicImage, PipelineError> {
-    let bpp = if channels == 4 { 4u32 } else { 3u32 };
+    copy_pixel_region(
+        pixels,
+        width,
+        height,
+        channels,
+        PixelRect {
+            x0: 0,
+            y0: 0,
+            x1: width,
+            y1: height,
+        },
+    )
+}
+
+/// Make just the owned strip the protocol encoder needs. For a compiled
+/// band this is a single contiguous copy, not a per-pixel crop.
+fn copy_pixel_region(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    channels: u8,
+    rect: PixelRect,
+) -> Result<DynamicImage, PipelineError> {
+    let bpp = if channels == 4 { 4 } else { 3 };
     let expected = width
         .checked_mul(height)
         .and_then(|v| v.checked_mul(bpp))
         .ok_or_else(|| pipeline_error("pixel size overflow"))? as usize;
-    if pixels.len() != expected {
+    if expected != pixels.len() {
         return Err(pipeline_error(format!(
             "pixel buffer size mismatch: expected {expected}, got {}",
             pixels.len()
         )));
     }
-    if bpp == 4 {
-        RgbaImage::from_raw(width, height, pixels.to_vec())
-            .map(DynamicImage::ImageRgba8)
-            .ok_or_else(|| pipeline_error("Can't build RGBA image from raw pixels"))
+    let crop_w = rect.x1 - rect.x0;
+    let crop_h = rect.y1 - rect.y0;
+    let stride = width as usize * bpp as usize;
+    let row_bytes = crop_w as usize * bpp as usize;
+    let offset = rect.y0 as usize * stride + rect.x0 as usize * bpp as usize;
+    let len = row_bytes * crop_h as usize;
+    let bytes = if row_bytes == stride {
+        pixels[offset..offset + len].to_vec()
     } else {
-        RgbImage::from_raw(width, height, pixels.to_vec())
-            .map(DynamicImage::ImageRgb8)
-            .ok_or_else(|| pipeline_error("Can't build RGB image from raw pixels"))
+        let mut bytes = Vec::with_capacity(len);
+        for row in 0..crop_h as usize {
+            let start = offset + row * stride;
+            bytes.extend_from_slice(&pixels[start..start + row_bytes]);
+        }
+        bytes
+    };
+    if bpp == 4 {
+        RgbaImage::from_raw(crop_w, crop_h, bytes).map(DynamicImage::ImageRgba8)
+    } else {
+        RgbImage::from_raw(crop_w, crop_h, bytes).map(DynamicImage::ImageRgb8)
     }
+    .ok_or_else(|| pipeline_error("Can't build image from raw pixels"))
 }
 
 #[inline]
@@ -1730,19 +1573,6 @@ fn cached_cell_size(cached: &CachedPage) -> CellSize {
         cached.data.img_data.width_cell,
         cached.data.img_data.height_cell,
     )
-}
-
-fn take_decoded(cached: &mut CachedPage) -> Result<DynamicImage, PipelineError> {
-    if cached.decoded.is_none() {
-        let img = decode_pixels(
-            &cached.data.img_data.pixels,
-            cached.data.img_data.width_px,
-            cached.data.img_data.height_px,
-            cached.data.img_data.channels,
-        )?;
-        cached.decoded = Some(img);
-    }
-    Ok(cached.decoded.take().expect("decoded should be present"))
 }
 
 fn crop_to_viewport(
@@ -1841,21 +1671,39 @@ fn pad_to_pixel_cell_bounds(
         return img;
     }
 
-    let rgb = img.to_rgb8();
-    let bg = *rgb.get_pixel(0, 0);
-    let mut padded = image::ImageBuffer::from_pixel(target_width, target_height, bg);
-
-    let src_width = rgb.width();
-    let copy_width = src_width.min(target_width) as usize;
-    let copy_height = rgb.height().min(target_height);
-    for y in 0..copy_height {
-        let src_row_start = (y * src_width) as usize * 3;
-        let dst_row_start = (y * target_width) as usize * 3;
-        padded.as_mut()[dst_row_start..dst_row_start + copy_width * 3]
-            .copy_from_slice(&rgb.as_raw()[src_row_start..src_row_start + copy_width * 3]);
+    if let DynamicImage::ImageRgba8(rgba) = img {
+        return DynamicImage::ImageRgba8(pad_pixels(
+            &rgba,
+            target_width,
+            target_height,
+            image::Rgba([0; 4]),
+        ));
     }
+    let rgb = img.into_rgb8();
+    DynamicImage::ImageRgb8(pad_pixels(
+        &rgb,
+        target_width,
+        target_height,
+        *rgb.get_pixel(0, 0),
+    ))
+}
 
-    DynamicImage::ImageRgb8(padded)
+fn pad_pixels<P: image::Pixel<Subpixel = u8>>(
+    src: &image::ImageBuffer<P, Vec<u8>>,
+    width: u32,
+    height: u32,
+    bg: P,
+) -> image::ImageBuffer<P, Vec<u8>> {
+    let mut padded = image::ImageBuffer::from_pixel(width, height, bg);
+    let channels = usize::from(P::CHANNEL_COUNT);
+    let src_stride = src.width() as usize * channels;
+    let dst_stride = width as usize * channels;
+    let copy_bytes = src_stride.min(dst_stride);
+    for y in 0..height.min(src.height()) as usize {
+        padded.as_mut()[y * dst_stride..y * dst_stride + copy_bytes]
+            .copy_from_slice(&src.as_raw()[y * src_stride..y * src_stride + copy_bytes]);
+    }
+    padded
 }
 
 fn encode_fixed_area_protocol(
@@ -1885,21 +1733,13 @@ fn pad_to_cell_bounds(img: DynamicImage, cell_size: CellSize, picker: &Picker) -
         return img;
     }
 
-    let rgb = img.to_rgb8();
-    let bg = *rgb.get_pixel(0, 0);
-    let mut padded = image::ImageBuffer::from_pixel(target_width, target_height, bg);
-
-    let src_width = rgb.width();
-    let copy_width = src_width.min(target_width) as usize;
-    let copy_height = rgb.height().min(target_height);
-    for y in 0..copy_height {
-        let src_row_start = (y * src_width) as usize * 3;
-        let dst_row_start = (y * target_width) as usize * 3;
-        padded.as_mut()[dst_row_start..dst_row_start + copy_width * 3]
-            .copy_from_slice(&rgb.as_raw()[src_row_start..src_row_start + copy_width * 3]);
-    }
-
-    DynamicImage::ImageRgb8(padded)
+    let rgb = img.into_rgb8();
+    DynamicImage::ImageRgb8(pad_pixels(
+        &rgb,
+        target_width,
+        target_height,
+        *rgb.get_pixel(0, 0),
+    ))
 }
 
 fn resize_exact_fast(
@@ -1945,8 +1785,11 @@ fn render_page_with_viewport(
     pid: u32,
     kitty_shm_support: bool,
 ) -> Result<ConvertedImage, PipelineError> {
+    let PageSource::Raster(bytes) = &cached.data.img_data.source else {
+        return Err(pipeline_error("Compiled pages require a viewport"));
+    };
     let mut dyn_img = decode_pixels(
-        &cached.data.img_data.pixels,
+        bytes,
         cached.data.img_data.width_px,
         cached.data.img_data.height_px,
         cached.data.img_data.channels,
@@ -1981,187 +1824,133 @@ fn render_viewport_tiles(
     overlays: &OverlaySet,
     picker: &Picker,
 ) -> Result<ConvertedImage, PipelineError> {
-    let decoded = take_decoded(cached)?;
-    let density = pixel_density_for_image(&decoded, cached_cell_size(cached), picker);
-    let tile_height_px = density.y.max(1);
-    let viewport_y_px = viewport.y_offset_cells.saturating_mul(tile_height_px);
-    let viewport_h_px = u32::from(viewport.viewport_height_cells).saturating_mul(tile_height_px);
-    let image_height = decoded.height();
-    let max_height = image_height.saturating_sub(viewport_y_px);
-    let visible_h_px = viewport_h_px.min(max_height).max(1);
-
-    // Constrain tile width to viewport so iTerm2 images don't overflow
-    let tile_w_cells = cached
-        .data
-        .img_data
-        .width_cell
-        .min(viewport.viewport_width_cells);
-    let tile_w_px = u32::from(tile_w_cells).saturating_mul(density.x);
-    let x_offset_px = viewport.x_offset_cells.saturating_mul(density.x);
-
-    let start_tile = viewport_y_px / tile_height_px;
-    let end_tile = (viewport_y_px + visible_h_px).div_ceil(tile_height_px);
-
-    let mut tiles = Vec::new();
-    let mut cached_count = 0u32;
-    let mut encoded_count = 0u32;
-    let mut dynamic_count = 0u32;
-    for tile_idx in start_tile..end_tile {
-        let tile_y_px = tile_idx * tile_height_px;
-        if tile_y_px >= image_height {
-            break;
-        }
-
-        let tile_actual_h_px = tile_height_px.min(image_height - tile_y_px);
-        let tile_h_cells = ((tile_actual_h_px as f32) / density.y as f32).ceil() as u16;
-        let tile_y_cells = (tile_y_px / density.y.max(1)) as i32;
-        let viewport_y_cells = viewport.y_offset_cells as i32;
-        let offset_cells = tile_y_cells - viewport_y_cells;
-        if offset_cells < 0 || offset_cells >= i32::from(viewport.viewport_height_cells) {
-            continue;
-        }
-
-        let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
-        let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
-
-        // Check overlays for THIS tile specifically, not the whole page
-        let local = overlays.for_tile(crop_x, crop_w, tile_y_px, tile_actual_h_px);
-        let tile_has_overlay = !local.is_empty();
-
-        let tile_area = Rect {
-            x: 0,
-            y: 0,
-            width: tile_w_cells,
-            height: tile_h_cells,
-        };
-
-        let protocol = if !tile_has_overlay {
-            if let Some(existing) = cached.tile_cache.get(&tile_idx) {
-                cached_count += 1;
-                Arc::clone(existing)
-            } else {
-                encoded_count += 1;
-                let tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
-                let tile_img = if picker.protocol_type() == ProtocolType::Iterm2 {
-                    pad_to_pixel_cell_bounds(
-                        tile_img,
-                        CellSize::new(tile_w_cells, tile_h_cells),
-                        density,
-                    )
-                } else {
-                    pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker)
-                };
-                let new_protocol = encode_fixed_area_protocol(tile_img, tile_area, picker)?;
-                let arc = Arc::new(new_protocol);
-                cached.tile_cache.insert(tile_idx, Arc::clone(&arc));
-                arc
-            }
-        } else {
-            dynamic_count += 1;
-            let mut tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
-            apply_overlays_dynamic(&mut tile_img, &local);
-            let tile_img = if picker.protocol_type() == ProtocolType::Iterm2 {
-                pad_to_pixel_cell_bounds(
-                    tile_img,
-                    CellSize::new(tile_w_cells, tile_h_cells),
-                    density,
-                )
-            } else {
-                pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker)
-            };
-            Arc::new(encode_fixed_area_protocol(tile_img, tile_area, picker)?)
-        };
-
-        tiles.push(TiledProtocol {
-            protocol,
-            y_offset_cells: offset_cells as u16,
-            height_cells: tile_h_cells,
-        });
-    }
-
-    if encoded_count > 0 || dynamic_count > 0 || log::log_enabled!(log::Level::Trace) {
-        log::debug!(
-            "render_viewport_tiles: page={} viewport_y={} tiles={}..{} cached={} encoded={} overlay_tiles={} tile_cache_size={}",
-            viewport.page,
-            viewport.y_offset_cells,
-            start_tile,
-            end_tile,
-            cached_count,
-            encoded_count,
-            dynamic_count,
-            cached.tile_cache.len()
-        );
-    }
-
-    cached.decoded = Some(decoded);
-
-    Ok(ConvertedImage::Tiled {
-        tiles,
-        cell_size: CellSize::new(tile_w_cells, viewport.viewport_height_cells),
-    })
+    let (tiles, cell_size) = render_tiles(cached, viewport, overlays, picker, false)?;
+    Ok(ConvertedImage::Tiled { tiles, cell_size })
 }
 
-fn render_specific_tiles(
-    decoded: &DynamicImage,
-    cell_size: CellSize,
+/// Replay each contiguous run of missing rows once. Only the encoded rows
+/// survive the call: overlays, cache hits and partial updates use the same
+/// strip coordinates, and never require a decoded page.
+fn render_tiles(
+    cached: &mut CachedPage,
     viewport: &ViewportUpdate,
-    tile_indices: &[u32],
     overlays: &OverlaySet,
     picker: &Picker,
-) -> Result<Vec<TiledProtocol>, PipelineError> {
-    let density = pixel_density_for_image(decoded, cell_size, picker);
-    let tile_height_px = density.y.max(1);
-    let image_height = decoded.height();
-    let viewport_y_cells = viewport.y_offset_cells as i32;
-    let viewport_height_cells = i32::from(viewport.viewport_height_cells);
-
-    let tile_w_cells = cell_size.width.min(viewport.viewport_width_cells);
-    let tile_w_px = u32::from(tile_w_cells).saturating_mul(density.x);
-    let x_offset_px = viewport.x_offset_cells.saturating_mul(density.x);
-
-    let mut tiles = Vec::new();
-    for &tile_idx in tile_indices {
-        let tile_y_px = tile_idx * tile_height_px;
-        if tile_y_px >= image_height {
-            continue;
-        }
-
-        let tile_y_cells = (tile_y_px / density.y.max(1)) as i32;
-        let offset_cells = tile_y_cells - viewport_y_cells;
-        if offset_cells < 0 || offset_cells >= viewport_height_cells {
-            continue;
-        }
-
-        let tile_actual_h_px = tile_height_px.min(image_height - tile_y_px);
-        let tile_h_cells = ((tile_actual_h_px as f32) / density.y as f32).ceil() as u16;
-
-        let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
-        let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
-        let mut tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
-        let local = overlays.for_tile(crop_x, crop_w, tile_y_px, tile_actual_h_px);
-        apply_overlays_dynamic(&mut tile_img, &local);
-        let tile_img = if picker.protocol_type() == ProtocolType::Iterm2 {
-            pad_to_pixel_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), density)
-        } else {
-            pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker)
-        };
-
-        let tile_area = Rect {
-            x: 0,
-            y: 0,
-            width: tile_w_cells,
-            height: tile_h_cells,
-        };
-        let protocol = encode_fixed_area_protocol(tile_img, tile_area, picker)?;
-
-        tiles.push(TiledProtocol {
-            protocol: Arc::new(protocol),
-            y_offset_cells: offset_cells as u16,
-            height_cells: tile_h_cells,
-        });
+    updates_only: bool,
+) -> Result<(Vec<TiledProtocol>, CellSize), PipelineError> {
+    enum Band<'a> {
+        Raster(&'a [u8]),
+        Rendered(DynamicImage),
     }
 
-    Ok(tiles)
+    let density = cached.density(picker);
+    let data = &cached.data.img_data;
+    let width_cells = data.width_cell.min(viewport.viewport_width_cells);
+    let cell_size = CellSize::new(width_cells, viewport.viewport_height_cells);
+    let x = viewport
+        .x_offset_cells
+        .saturating_mul(density.x)
+        .min(data.width_px.saturating_sub(1));
+    let width = (u32::from(width_cells) * density.x).min(data.width_px - x);
+    let start = viewport.y_offset_cells;
+    let end = start
+        .saturating_add(u32::from(viewport.viewport_height_cells))
+        .min(data.height_px.div_ceil(density.y));
+    if picker.protocol_type() == ProtocolType::Iterm2 {
+        cached
+            .tile_cache
+            .retain(|row, _| (start..end).contains(row) && width != 0);
+    }
+    if width == 0 || start >= end {
+        return Ok((Vec::new(), cell_size));
+    }
+
+    let mut tiles = if updates_only {
+        Vec::new()
+    } else {
+        Vec::with_capacity((end - start) as usize)
+    };
+    let tile = |row: u32, protocol| TiledProtocol {
+        protocol,
+        y_offset_cells: (row - start) as u16,
+        height_cells: 1,
+    };
+    let area = Rect::new(0, 0, width_cells, 1);
+    let strip_cells = CellSize::new(width_cells, 1);
+    let has_overlays = !overlays.is_empty();
+    let mut row = start;
+    while row < end {
+        if let Some(hit) = cached.tile_cache.get(&row) {
+            if !updates_only {
+                tiles.push(tile(row, Arc::clone(hit)));
+            }
+            row += 1;
+            continue;
+        }
+
+        let run_end = (row + 1..end)
+            .find(|next| cached.tile_cache.contains_key(next))
+            .unwrap_or(end);
+        let top = row * density.y;
+        let bottom = run_end.saturating_mul(density.y).min(data.height_px);
+        let mut band = match &data.source {
+            PageSource::Raster(bytes) => Band::Raster(bytes),
+            PageSource::Compiled(page) => {
+                let mut img = page.render_region(x, top, width, bottom - top)?;
+                if has_overlays {
+                    apply_overlays_dynamic(
+                        &mut img,
+                        &overlays.for_tile(x, width, top, bottom - top),
+                    );
+                }
+                Band::Rendered(img)
+            }
+        };
+        while row < run_end {
+            let y = row * density.y;
+            let height = density.y.min(data.height_px - y);
+            let mut img = match &mut band {
+                Band::Rendered(img) if img.height() == height => std::mem::take(img),
+                Band::Rendered(img) => copy_pixel_region(
+                    img.as_bytes(),
+                    width,
+                    bottom - top,
+                    img.color().channel_count(),
+                    PixelRect {
+                        x0: 0,
+                        y0: y - top,
+                        x1: width,
+                        y1: y - top + height,
+                    },
+                )?,
+                Band::Raster(bytes) => copy_pixel_region(
+                    bytes,
+                    data.width_px,
+                    data.height_px,
+                    data.channels,
+                    PixelRect {
+                        x0: x,
+                        y0: y,
+                        x1: x + width,
+                        y1: y + height,
+                    },
+                )?,
+            };
+            if has_overlays && matches!(&band, Band::Raster(_)) {
+                apply_overlays_dynamic(&mut img, &overlays.for_tile(x, width, y, height));
+            }
+            let img = if picker.protocol_type() == ProtocolType::Iterm2 {
+                pad_to_pixel_cell_bounds(img, strip_cells, density)
+            } else {
+                pad_to_cell_bounds(img, strip_cells, picker)
+            };
+            let protocol = Arc::new(encode_fixed_area_protocol(img, area, picker)?);
+            cached.tile_cache.insert(row, Arc::clone(&protocol));
+            tiles.push(tile(row, protocol));
+            row += 1;
+        }
+    }
+    Ok((tiles, cell_size))
 }
 
 static SHM_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2782,6 +2571,157 @@ mod tests {
     fn decode_pixels_rejects_size_mismatch() {
         // 4-channel decode needs width*height*4 bytes; give it RGB-sized data.
         assert!(decode_pixels(&[0; 6], 2, 1, 4).is_err());
+    }
+
+    fn raster_page(page_num: usize) -> Arc<PageData> {
+        Arc::new(PageData {
+            img_data: super::super::ImageData {
+                source: PageSource::Raster((0..16 * 48 * 3).map(|i| i as u8).collect()),
+                width_px: 16,
+                height_px: 48,
+                width_cell: 8,
+                height_cell: 12,
+                channels: 3,
+            },
+            page_num,
+            scale_factor: 1.0,
+            requested_scale: 1.0,
+            achieved_scale: 1.0,
+            render_area_width_cells: 8,
+            render_area_height_cells: 3,
+            line_bounds: vec![],
+            link_rects: vec![],
+            page_height_px: 48.0,
+        })
+    }
+
+    #[test]
+    fn iterm_scroll_keeps_only_overlapping_rows_and_drops_old_generations() {
+        let mut picker = Picker::from_fontsize((2, 4));
+        picker.set_protocol_type(ProtocolType::Iterm2);
+        let mut engine = ConverterEngine::new(picker, 2, false, false);
+        let (send, recv) = flume::unbounded();
+        engine
+            .handle_msg(ConversionCommand::SetPageCount(2), &send)
+            .unwrap();
+        let page = raster_page(0);
+        engine
+            .handle_msg(ConversionCommand::EnqueuePage(Arc::clone(&page)), &send)
+            .unwrap();
+        assert!(
+            engine.next_page(&mut 0).unwrap().is_none(),
+            "no viewport yet"
+        );
+        let mut vp = ViewportUpdate {
+            page: 0,
+            x_offset_cells: 1,
+            y_offset_cells: 2,
+            viewport_width_cells: 5,
+            viewport_height_cells: 3,
+        };
+        engine
+            .handle_msg(ConversionCommand::UpdateViewport(vp), &send)
+            .unwrap();
+        let first = recv.try_recv().unwrap().unwrap();
+        let ConvertedImage::Tiled { tiles: first, .. } = first.image else {
+            panic!("missing strips")
+        };
+        vp.y_offset_cells += 1;
+        engine
+            .handle_msg(ConversionCommand::UpdateViewport(vp), &send)
+            .unwrap();
+        let next = recv.try_recv().unwrap().unwrap();
+        let ConvertedImage::Tiled { tiles: next, .. } = next.image else {
+            panic!("missing strips")
+        };
+        assert!(Arc::ptr_eq(&first[1].protocol, &next[0].protocol));
+        assert!(Arc::ptr_eq(&first[2].protocol, &next[1].protocol));
+        let cache = &engine.page_cache[0].as_ref().unwrap().tile_cache;
+        assert_eq!(cache.len(), 3);
+        assert!(!cache.contains_key(&2));
+
+        vp.x_offset_cells += 1;
+        engine
+            .handle_msg(ConversionCommand::UpdateViewport(vp), &send)
+            .unwrap();
+        let panned = recv.try_recv().unwrap().unwrap();
+        let ConvertedImage::Tiled { tiles: panned, .. } = panned.image else {
+            panic!("missing strips")
+        };
+        assert!(!Arc::ptr_eq(&next[0].protocol, &panned[0].protocol));
+        engine.update_cache_for_page(0, &page);
+        assert_eq!(engine.page_cache[0].as_ref().unwrap().tile_cache.len(), 3);
+        engine.update_cache_for_page(0, &raster_page(0));
+        assert!(engine.page_cache[0].as_ref().unwrap().tile_cache.is_empty());
+        assert!(!engine.sent_for_viewport.contains(&0));
+    }
+
+    #[test]
+    fn iterm_dual_cursor_updates_are_relative_to_each_page_viewport() {
+        let mut picker = Picker::from_fontsize((2, 4));
+        picker.set_protocol_type(ProtocolType::Iterm2);
+        let mut engine = ConverterEngine::new(picker, 2, false, false);
+        let (send, recv) = flume::unbounded();
+        engine
+            .handle_msg(ConversionCommand::SetPageCount(2), &send)
+            .unwrap();
+        for page in 0..2 {
+            engine.update_cache_for_page(page, &raster_page(page));
+        }
+        let left = ViewportUpdate {
+            page: 0,
+            x_offset_cells: 1,
+            y_offset_cells: 2,
+            viewport_width_cells: 5,
+            viewport_height_cells: 3,
+        };
+        let right = ViewportUpdate {
+            page: 1,
+            x_offset_cells: 0,
+            y_offset_cells: 7,
+            ..left
+        };
+        engine
+            .handle_msg(
+                ConversionCommand::UpdateDualViewport(vec![left, right]),
+                &send,
+            )
+            .unwrap();
+        assert_eq!(recv.drain().count(), 2);
+        let mut cursor = CursorRect {
+            page: 0,
+            x: 4,
+            y: 12,
+            width: 2,
+            height: 4,
+        };
+        engine
+            .handle_msg(ConversionCommand::UpdateCursor(Some(cursor.clone())), &send)
+            .unwrap();
+        let strip = |frame: RenderedFrame| {
+            let ConvertedImage::TileUpdate { tiles, .. } = frame.image else {
+                panic!("not a strip update")
+            };
+            assert_eq!(tiles.len(), 1);
+            (frame.index, tiles[0].y_offset_cells)
+        };
+        assert_eq!(strip(recv.try_recv().unwrap().unwrap()), (0, 1));
+        cursor.page = 1;
+        cursor.y = 28;
+        engine
+            .handle_msg(ConversionCommand::UpdateCursor(Some(cursor)), &send)
+            .unwrap();
+        let mut updates = recv
+            .drain()
+            .map(|frame| strip(frame.unwrap()))
+            .collect::<Vec<_>>();
+        updates.sort_unstable();
+        assert_eq!(updates, [(0, 1), (1, 0)]);
+        engine
+            .handle_msg(ConversionCommand::UpdateViewport(right), &send)
+            .unwrap();
+        assert!(engine.page_cache[0].as_ref().unwrap().tile_cache.is_empty());
+        assert!(!engine.last_viewport_by_page.contains_key(&0));
     }
 
     fn link(x0: u32, y0: u32, x1: u32, y1: u32) -> LinkRect {
